@@ -3,7 +3,6 @@ package com.example.backend.service;
 import com.example.backend.model.Payment;
 import com.example.backend.model.Booking;
 import com.example.backend.repository.PaymentRepository;
-import com.example.backend.repository.BookingRepository;
 import org.springframework.stereotype.Service;
 import java.util.List;
 
@@ -11,12 +10,12 @@ import java.util.List;
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
-    private final BookingRepository bookingRepository;
+    private final BookingService bookingService;
     private final NotificationService notificationService;
 
-    public PaymentService(PaymentRepository paymentRepository, BookingRepository bookingRepository, NotificationService notificationService) {
+    public PaymentService(PaymentRepository paymentRepository, BookingService bookingService, NotificationService notificationService) {
         this.paymentRepository = paymentRepository;
-        this.bookingRepository = bookingRepository;
+        this.bookingService = bookingService;
         this.notificationService = notificationService;
     }
 
@@ -30,40 +29,83 @@ public class PaymentService {
         return paymentRepository.save(p);
     }
 
-    public Payment logCashPayment(Long bookingId, String userEmail, Double amount) {
-        Payment p = new Payment();
-        p.setBookingId(bookingId);
-        p.setUserEmail(userEmail);
-        p.setAmount(amount);
-        p.setStatus("CONFIRMED"); // Cash is considered confirmed if the driver accepts
-        p.setStripePaymentIntentId("CASH_" + System.currentTimeMillis());
-        Payment saved = paymentRepository.save(p);
-        sendPaymentSuccessNotifications(saved);
-        return saved;
-    }
-
     public Payment confirmPayment(String stripePaymentIntentId, String stripePaymentMethodId) {
         Payment p = paymentRepository.findByStripePaymentIntentId(stripePaymentIntentId);
         if (p != null) {
             p.setStripePaymentMethodId(stripePaymentMethodId);
             p.setStatus("CONFIRMED");
             Payment saved = paymentRepository.save(p);
-            
-            // CRITICAL: Also update the Booking status to CONFIRMED
-            Booking b = bookingRepository.findById(p.getBookingId()).orElse(null);
-            if (b != null && !"CONFIRMED".equalsIgnoreCase(b.getStatus())) {
-                b.setStatus("CONFIRMED");
-                bookingRepository.save(b);
+
+            // Update Booking Status
+            if (p.getBookingId() != null) {
+                Booking b = bookingService.findById(p.getBookingId()).orElse(null);
+                if (b != null) {
+                    b.setPaymentStatus("PAID");
+                    b.setStatus("COMPLETED"); 
+                    bookingService.updateBooking(b);
+
+                    // Notify Driver
+                    if (b.getRide() != null) {
+                        notificationService.createNotification(
+                            b.getRide().getDriverEmail(), 
+                            "Passenger Done the Payment: ₹" + b.getTotalPrice() + " from " + b.getUserEmail(), 
+                            "PAYMENT_RECEIVED"
+                        );
+                    }
+
+                    // Notify Passenger (Explicitly)
+                    notificationService.createNotification(
+                        b.getUserEmail(), 
+                        "Payment Successful! Your ride to " + b.getDropoffLocation() + " is CONFIRMED.", 
+                        "PAYMENT_CONFIRMED"
+                    );
+                }
             }
-            
-            // Send notifications (Passes booking detail internally)
-            sendPaymentSuccessNotifications(saved);
-            
             return saved;
         }
         return null;
     }
 
+
+    public com.example.backend.model.Booking simulatePayment(Long bookingId, String userEmail, Double amount) {
+        // Create Mock Payment
+        Payment p = new Payment();
+        p.setBookingId(bookingId);
+        p.setUserEmail(userEmail);
+        p.setAmount(amount);
+        p.setStripePaymentIntentId("SIMULATED_INTENT_" + System.currentTimeMillis());
+        p.setStripePaymentMethodId("SIMULATED_METHOD");
+        p.setStatus("CONFIRMED");
+        paymentRepository.save(p);
+
+        // Update Booking
+        if (bookingId != null) {
+            Booking b = bookingService.findById(bookingId).orElse(null);
+            if (b != null) {
+                b.setPaymentStatus("PAID");
+                b.setStatus("COMPLETED");
+                bookingService.updateBooking(b);
+
+                // Notify Driver
+                if (b.getRide() != null) {
+                    notificationService.createNotification(
+                        b.getRide().getDriverEmail(), 
+                        "Simulated Payment Received: ₹" + b.getTotalPrice() + " from " + b.getUserEmail(), 
+                        "PAYMENT_RECEIVED"
+                    );
+                }
+
+                // Notify Passenger (Explicitly)
+                notificationService.createNotification(
+                    b.getUserEmail(), 
+                    "Payment Successful! Your ride to " + b.getDropoffLocation() + " is CONFIRMED.", 
+                    "PAYMENT_CONFIRMED"
+                );
+                return b;
+            }
+        }
+        return null;
+    }
 
     public List<Payment> getMyHistory(String email) {
         return paymentRepository.findByUserEmail(email);
@@ -71,30 +113,5 @@ public class PaymentService {
 
     public List<Payment> getDriverHistory(String email) {
         return paymentRepository.findByDriverEmail(email);
-    }
-
-    public Payment getPaymentByBookingId(Long bookingId) {
-        return paymentRepository.findByBookingId(bookingId);
-    }
-
-    private void sendPaymentSuccessNotifications(Payment payment) {
-        try {
-            // Get booking details
-            Booking booking = bookingRepository.findById(payment.getBookingId()).orElse(null);
-            if (booking == null) return;
-
-            // Notify passenger (Specialized method handles both DB and Email)
-            notificationService.sendPaymentSuccess(payment.getUserEmail(), payment.getAmount(), booking.getSeats());
-
-            // Notify driver (Standard in-app notification)
-            if (booking.getVehicle() != null && booking.getVehicle().getDriverEmail() != null) {
-                String driverMsg = String.format("Payment received! %s paid ₹%.2f for %d seat(s).", 
-                    payment.getUserEmail(), payment.getAmount(), booking.getSeats());
-                notificationService.send(booking.getVehicle().getDriverEmail(), driverMsg);
-            }
-        } catch (Exception e) {
-            // Log error but don't fail the payment
-            System.err.println("Failed to send payment notifications: " + e.getMessage());
-        }
     }
 }

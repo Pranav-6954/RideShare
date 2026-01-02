@@ -17,7 +17,6 @@ public class Payment {
     private String stripePaymentIntentId;
     private String stripePaymentMethodId;
 
-
     private Double amount;
     private String status; // PENDING, CONFIRMED, FAILED
 
@@ -63,7 +62,6 @@ public class Payment {
     public void setStripePaymentMethodId(String stripePaymentMethodId) {
         this.stripePaymentMethodId = stripePaymentMethodId;
     }
-
 
     public Double getAmount() {
         return amount;

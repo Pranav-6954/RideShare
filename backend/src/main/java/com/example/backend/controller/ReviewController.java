@@ -5,14 +5,11 @@ import com.example.backend.service.ReviewService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
-
-import java.util.List;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/reviews")
 public class ReviewController {
-
     private final ReviewService reviewService;
 
     public ReviewController(ReviewService reviewService) {
@@ -20,20 +17,27 @@ public class ReviewController {
     }
 
     @PostMapping
-    public ResponseEntity<?> createReview(@RequestBody Review r, Authentication auth) {
-        if (auth == null) return ResponseEntity.status(401).build();
-        String currentUser = auth.getName();
-
-        try {
-            Review saved = reviewService.createReview(r, currentUser);
-            return ResponseEntity.ok(saved);
-        } catch (RuntimeException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        }
+    public ResponseEntity<?> submit(@RequestBody Review review, Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+        review.setReviewerEmail(auth.getName());
+        return ResponseEntity.ok(reviewService.submitReview(review));
     }
 
     @GetMapping("/user/{email}")
-    public List<Review> getUserReviews(@PathVariable String email) {
-        return reviewService.getReviewsForUser(email);
+    public ResponseEntity<?> getForUser(@PathVariable String email) {
+        return ResponseEntity.ok(reviewService.getReviewsForUser(email));
+    }
+
+    @GetMapping("/user/{email}/average")
+    public ResponseEntity<?> getAverage(@PathVariable String email) {
+        return ResponseEntity.ok(Map.of("averageRating", reviewService.getAverageRating(email)));
+    }
+
+    @GetMapping("/user/{email}/given")
+    public ResponseEntity<?> getGivenReviews(@PathVariable String email) {
+        System.out.println("Fetching reviews given by: " + email);
+        java.util.List<Review> reviews = reviewService.getReviewsGivenByUser(email);
+        System.out.println("Found " + reviews.size() + " reviews.");
+        return ResponseEntity.ok(reviews);
     }
 }

@@ -1,9 +1,9 @@
 package com.example.backend.controller;
 
 import com.example.backend.model.Booking;
-import com.example.backend.model.Vehicle;
+import com.example.backend.model.Ride;
 import com.example.backend.service.BookingService;
-import com.example.backend.service.VehicleService;
+import com.example.backend.service.RideService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -15,17 +15,13 @@ import java.util.List;
 @RequestMapping("/api/bookings")
 public class BookingController {
     private final BookingService bookingService;
-    private final VehicleService vehicleService;
+    private final RideService rideService;
     private final com.example.backend.service.NotificationService notificationService;
-    private final com.example.backend.service.PaymentService paymentService;
 
-    public BookingController(BookingService bookingService, VehicleService vehicleService, 
-            com.example.backend.service.NotificationService notificationService,
-            com.example.backend.service.PaymentService paymentService) {
+    public BookingController(BookingService bookingService, RideService rideService, com.example.backend.service.NotificationService notificationService) {
         this.bookingService = bookingService;
-        this.vehicleService = vehicleService;
+        this.rideService = rideService;
         this.notificationService = notificationService;
-        this.paymentService = paymentService;
     }
 
     @PostMapping
@@ -34,12 +30,13 @@ public class BookingController {
             return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
         }
         try {
-            Long vehicleId = Long.valueOf(body.get("vehicleId").toString());
-            Vehicle v = vehicleService.findById(vehicleId).orElseThrow(() -> new RuntimeException("Vehicle not found"));
+            Long rideId = Long.valueOf(body.containsKey("rideId") ? body.get("rideId").toString()
+                    : body.get("vehicleId").toString());
+            Ride r = rideService.findById(rideId).orElseThrow(() -> new RuntimeException("Ride not found"));
 
-            boolean isDriver = auth.getName().equals(v.getDriverEmail());
+            boolean isDriver = auth.getName().equals(r.getDriverEmail());
 
-            // Access Control: Allow ROLE_USER OR the Driver of this vehicle
+            // Access Control: Allow ROLE_USER OR the Driver of this ride
             boolean isUser = auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_USER"));
             if (!isUser && !isDriver) {
                 return ResponseEntity.status(403).body(Map.of("error", "User or Owner required"));
@@ -49,7 +46,7 @@ public class BookingController {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> rawPassengers = (List<Map<String, Object>>) body.get("passengers");
             if (rawPassengers == null)
-                rawPassengers = List.of(); 
+                rawPassengers = List.of();
 
             List<com.example.backend.model.Passenger> passengers = rawPassengers.stream().map(p -> {
                 String name = (String) p.get("name");
@@ -60,37 +57,25 @@ public class BookingController {
 
             Booking b = new Booking();
             b.setUserEmail(auth.getName());
-            b.setVehicle(v);
+            b.setRide(r);
             b.setSeats(seats);
             b.setPassengers(passengers);
 
+            // Extract Locations from Body
             if (body.containsKey("pickupLocation"))
                 b.setPickupLocation(body.get("pickupLocation").toString());
             if (body.containsKey("dropoffLocation"))
                 b.setDropoffLocation(body.get("dropoffLocation").toString());
 
-            Double totalPrice = 0.0;
             if (body.containsKey("totalPrice")) {
-                totalPrice = Double.valueOf(body.get("totalPrice").toString());
-                b.setTotalPrice(totalPrice);
+                b.setTotalPrice(Double.valueOf(body.get("totalPrice").toString()));
             }
 
-            // Handle Payment Method
-            String paymentMethod = body.containsKey("paymentMethod") ? body.get("paymentMethod").toString() : "ONLINE";
-            
-            if ("CASH".equalsIgnoreCase(paymentMethod)) {
-                b.setStatus("CONFIRMED");
-            } else {
-                b.setStatus("PENDING");
+            if (body.containsKey("paymentMethod")) {
+                b.setPaymentMethod(body.get("paymentMethod").toString());
             }
 
             Booking saved = bookingService.createBooking(b);
-
-            // If cash, log the payment immediately
-            if ("CASH".equalsIgnoreCase(paymentMethod)) {
-                paymentService.logCashPayment(saved.getId(), auth.getName(), totalPrice);
-            }
-
             return ResponseEntity.ok(saved);
         } catch (Exception ex) {
             return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
@@ -117,41 +102,21 @@ public class BookingController {
     public ResponseEntity<?> driverBookings(Authentication auth) {
         if (auth == null)
             return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
-        // This requires a new service method to find bookings where vehicle.driverEmail
-        // = auth.getName()
-        // OR we filter all bookings. For efficiency, let's assume we can filter or we
-        // just list all and filter in memory (not ideal but works for now)
-        // ideally: bookingService.findByDriverEmail(auth.getName())
 
-        // Let's rely on the service to implement this or a custom query.
-        // Since we cannot easily modify Repository/Service blindly, let's use a
-        // workaround:
-        // Get all bookings and filter by stream (OK for small scale).
-        // Get all bookings and filter by stream (OK for small scale).
-        // Get all bookings and filter by stream
         String currentUser = auth.getName();
         List<Booking> all = bookingService.allBookings();
-        System.out.println("DEBUG: Sending request. Total bookings in DB: " + all.size());
 
         List<Booking> driverBookings = all.stream()
                 .filter(b -> {
-                    if (b.getVehicle() == null)
+                    if (b.getRide() == null)
                         return false;
-                    String vDriver = b.getVehicle().getDriverEmail();
-                    if (vDriver == null) {
-                        System.out.println("Booking " + b.getId() + " skipped: Vehicle has NO driver email");
+                    String rDriver = b.getRide().getDriverEmail();
+                    if (rDriver == null)
                         return false;
-                    }
-                    boolean match = currentUser.trim().equalsIgnoreCase(vDriver.trim());
-                    if (!match) {
-                        System.out.println(
-                                "Booking " + b.getId() + " mismatch: [" + vDriver + "] != [" + currentUser + "]");
-                    }
-                    return match;
+                    return currentUser.trim().equalsIgnoreCase(rDriver.trim());
                 })
                 .toList();
 
-        System.out.println("Driver " + currentUser + " has " + driverBookings.size() + " bookings.");
         return ResponseEntity.ok(driverBookings);
     }
 
@@ -166,56 +131,13 @@ public class BookingController {
         if (b == null)
             return ResponseEntity.status(404).body(Map.of("error", "Booking not found"));
 
-        // Verify this booking belongs to a vehicle owned by this driver
-        if (!auth.getName().equals(b.getVehicle().getDriverEmail())) {
+        // Verify this booking belongs to a ride owned by this driver
+        if (!auth.getName().equals(b.getRide().getDriverEmail())) {
             return ResponseEntity.status(403).body(Map.of("error", "Not your booking"));
-        }
-
-        String oldStatus = b.getStatus();
-        if (oldStatus.equals(newStatus)) {
-            return ResponseEntity.ok(b);
-        }
-
-        // Logic: If transitioning TO Rejected or Cancelled, return seats
-        if ("REJECTED".equalsIgnoreCase(newStatus) || "CANCELLED".equalsIgnoreCase(newStatus)) {
-             Vehicle v = b.getVehicle();
-             v.setTickets(v.getTickets() + b.getSeats());
-             vehicleService.save(v);
-        }
-        // Logic: If transitioning FROM Rejected back to Pending/Confirmed (rare but possible), deduct seats
-        else if ("REJECTED".equalsIgnoreCase(oldStatus) || "CANCELLED".equalsIgnoreCase(oldStatus)) {
-             Vehicle v = b.getVehicle();
-             if (v.getTickets() < b.getSeats()) {
-                 return ResponseEntity.badRequest().body(Map.of("error", "Not enough seats available to reinstate booking"));
-             }
-             v.setTickets(v.getTickets() - b.getSeats());
-             vehicleService.save(v);
         }
 
         b.setStatus(newStatus);
         bookingService.updateBooking(b); // Save
-
-        // Phase 3: Send Email Confirmation if status changed to CONFIRMED
-        if ("CONFIRMED".equalsIgnoreCase(newStatus)) {
-            try {
-                // Get passenger name (default to email if not found)
-                String passengerName = b.getUserEmail();
-                if (b.getPassengers() != null && !b.getPassengers().isEmpty()) {
-                    passengerName = b.getPassengers().get(0).getName();
-                }
-
-                notificationService.sendBookingConfirmation(
-                    b.getUserEmail(),
-                    passengerName,
-                    b.getVehicle().getFromLocation(),
-                    b.getVehicle().getToLocation(),
-                    b.getVehicle().getDate()
-                );
-            } catch (Exception e) {
-                System.err.println("Failed to send booking confirmation email: " + e.getMessage());
-            }
-        }
-        
         return ResponseEntity.ok(b);
     }
 
@@ -226,5 +148,55 @@ public class BookingController {
         }
         return ResponseEntity
                 .ok(bookingService.estimatePrice(b.getPickupLocation(), b.getDropoffLocation(), b.getSeats()));
+    }
+
+    @PutMapping("/{id}/confirm-dropoff")
+    public ResponseEntity<?> confirmDropoff(@PathVariable Long id, Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+        
+        Booking b = bookingService.findById(id).orElse(null);
+        if (b == null) return ResponseEntity.status(404).body(Map.of("error", "Booking not found"));
+
+        if (!b.getUserEmail().equals(auth.getName())) {
+             return ResponseEntity.status(403).body(Map.of("error", "Not your booking"));
+        }
+
+        if (!"DRIVER_COMPLETED".equals(b.getStatus())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Driver has not marked ride as completed yet."));
+        }
+
+        if ("CASH".equalsIgnoreCase(b.getPaymentMethod())) {
+            b.setStatus("CASH_PAYMENT_PENDING"); // Wait for Driver to confirm receipt
+        } else {
+            b.setStatus("PAYMENT_PENDING"); // Wait for Stripe Payment
+        }
+
+        bookingService.updateBooking(b);
+        return ResponseEntity.ok(b);
+    }
+
+    @PutMapping("/{id}/confirm-cash")
+    public ResponseEntity<?> confirmCash(@PathVariable Long id, Authentication auth) {
+        if (auth == null) return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+        
+        Booking b = bookingService.findById(id).orElse(null);
+        if (b == null) return ResponseEntity.status(404).body(Map.of("error", "Booking not found"));
+
+        // Must be Driver
+        if (!b.getRide().getDriverEmail().equals(auth.getName())) {
+             return ResponseEntity.status(403).body(Map.of("error", "Not your booking"));
+        }
+
+        if (!"CASH_PAYMENT_PENDING".equals(b.getStatus())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Booking is not waiting for cash confirmation."));
+        }
+
+        b.setStatus("COMPLETED");
+        b.setPaymentStatus("PAID"); 
+        bookingService.updateBooking(b);
+
+        notificationService.createNotification(b.getUserEmail(), "Driver confirmed Cash Payment. Ride Complete!", "PAYMENT_CONFIRMED");
+        
+        return ResponseEntity.ok(b);
     }
 }

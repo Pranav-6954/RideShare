@@ -1,58 +1,34 @@
 package com.example.backend.service;
 
 import com.example.backend.model.Review;
-import com.example.backend.model.Booking;
 import com.example.backend.repository.ReviewRepository;
-import com.example.backend.repository.BookingRepository;
 import org.springframework.stereotype.Service;
-
 import java.util.List;
 
 @Service
 public class ReviewService {
-
     private final ReviewRepository reviewRepository;
-    private final BookingRepository bookingRepository;
     private final NotificationService notificationService;
 
-    public ReviewService(ReviewRepository reviewRepository, BookingRepository bookingRepository, NotificationService notificationService) {
+    public ReviewService(ReviewRepository reviewRepository, NotificationService notificationService) {
         this.reviewRepository = reviewRepository;
-        this.bookingRepository = bookingRepository;
         this.notificationService = notificationService;
     }
 
-    public Review createReview(Review review, String reviewerEmail) {
-        // Set the reviewer email from authenticated user
-        review.setReviewerEmail(reviewerEmail);
-        
-        // Validate booking
-        Booking booking = bookingRepository.findById(review.getBookingId()).orElse(null);
-        if (booking == null) {
-            throw new RuntimeException("Invalid Booking ID");
-        }
-
-        // Save review
+    public Review submitReview(Review review) {
         Review saved = reviewRepository.save(review);
-
-        // Send notification to the reviewee
-        try {
-            String revieweeEmail = review.getRevieweeEmail();
-            if (revieweeEmail != null && !revieweeEmail.isEmpty()) {
-                String stars = "⭐".repeat(Math.min(review.getRating(), 5));
-                String msg = String.format("New review received! %s rated you %s (%d/5)", 
-                    reviewerEmail, stars, review.getRating());
-                
-                if (review.getComment() != null && !review.getComment().isEmpty()) {
-                    msg += " - \"" + review.getComment() + "\"";
-                }
-                
-                notificationService.send(revieweeEmail, msg);
-            }
-        } catch (Exception e) {
-            // Log error but don't fail the review creation
-            System.err.println("Failed to send review notification: " + e.getMessage());
-        }
-
+        
+        // Notify the reviewee
+        String message = String.format("A new %d-star review was posted for you: \"%s\"", 
+            review.getRating(), 
+            review.getComment().length() > 50 ? review.getComment().substring(0, 47) + "..." : review.getComment());
+        
+        notificationService.createNotification(
+            review.getRevieweeEmail(), 
+            message, 
+            "NEW_REVIEW"
+        );
+        
         return saved;
     }
 
@@ -60,7 +36,13 @@ public class ReviewService {
         return reviewRepository.findByRevieweeEmail(email);
     }
 
-    public List<Review> getReviewsByUser(String email) {
+    public double getAverageRating(String email) {
+        List<Review> reviews = getReviewsForUser(email);
+        if (reviews.isEmpty()) return 0.0;
+        return reviews.stream().mapToInt(Review::getRating).average().orElse(0.0);
+    }
+
+    public List<Review> getReviewsGivenByUser(String email) {
         return reviewRepository.findByReviewerEmail(email);
     }
 }

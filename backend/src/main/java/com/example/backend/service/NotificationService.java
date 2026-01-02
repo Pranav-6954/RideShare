@@ -4,35 +4,27 @@ import com.example.backend.model.Notification;
 import com.example.backend.repository.NotificationRepository;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
-
 import java.util.List;
 
 @Service
 public class NotificationService {
-
     private final NotificationRepository repo;
     private final SimpMessagingTemplate messagingTemplate;
-    private final EmailService emailService;
 
-    public NotificationService(NotificationRepository repo, SimpMessagingTemplate messagingTemplate, EmailService emailService) {
+    public NotificationService(NotificationRepository repo, SimpMessagingTemplate messagingTemplate) {
         this.repo = repo;
         this.messagingTemplate = messagingTemplate;
-        this.emailService = emailService;
     }
 
-    public void send(String recipientEmail, String message) {
-        // 1. Save to DB
-        Notification n = new Notification(recipientEmail, message);
-        repo.save(n);
-
-        // 2. Push Real-time
-        // Topic convention: /topic/notifications/{email}
-        if(messagingTemplate != null) {
-            messagingTemplate.convertAndSend("/topic/notifications/" + recipientEmail, message);
-        }
+    public Notification createNotification(String email, String message, String type) {
+        Notification n = new Notification(email, message, type);
+        Notification saved = repo.save(n);
+        // Broadcast in-app
+        messagingTemplate.convertAndSend("/topic/user/" + email, saved);
+        return saved;
     }
 
-    public List<Notification> getMyNotifications(String email) {
+    public List<Notification> getNotificationsForUser(String email) {
         return repo.findByRecipientEmailOrderByCreatedAtDesc(email);
     }
 
@@ -43,19 +35,12 @@ public class NotificationService {
         });
     }
 
-    // Phase 3: Email specialized methods
-    public void sendBookingConfirmation(String to, String passengerName, String from, String toLoc, String date) {
-        send(to, "Booking Confirmed! Ride from " + from + " to " + toLoc + " on " + date);
-        emailService.sendBookingConfirmation(to, passengerName, from, toLoc, date);
+    public long getUnreadCount(String email) {
+        return repo.countByRecipientEmailAndIsReadFalse(email);
     }
 
-    public void sendPaymentSuccess(String to, double amount, int seats) {
-        send(to, "Payment Successful! Amount: ₹" + amount + " for " + seats + " seats.");
-        emailService.sendPaymentSuccess(to, amount, seats);
-    }
-
-    public void sendRideCancellation(String to, String from, String toLoc, String date) {
-        send(to, "Ride Cancelled! The ride from " + from + " to " + toLoc + " on " + date + " has been cancelled.");
-        emailService.sendRideCancellation(to, from, toLoc, date);
+    @org.springframework.transaction.annotation.Transactional
+    public void markAllAsRead(String email) {
+        repo.markAllReadForUser(email);
     }
 }

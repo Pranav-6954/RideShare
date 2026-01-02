@@ -14,8 +14,8 @@ public class Booking {
     private String userEmail;
 
     @ManyToOne
-    @JoinColumn(name = "vehicle_id")
-    private Vehicle vehicle;
+    @JoinColumn(name = "ride_id")
+    private Ride ride;
 
     private int seats;
 
@@ -23,7 +23,9 @@ public class Booking {
     @CollectionTable(name = "booking_passengers", joinColumns = @JoinColumn(name = "booking_id"))
     private List<Passenger> passengers;
 
-    private String status = "PENDING"; // PENDING, CONFIRMED, REJECTED
+    private String status = "PENDING"; // PENDING, ACCEPTED, REJECTED, DRIVER_COMPLETED, CASH_PAYMENT_PENDING, PAYMENT_PENDING, PAID, COMPLETED, CANCELLED
+    private String paymentMethod = "STRIPE"; // STRIPE, CASH
+    private String paymentStatus = "UNPAID"; // UNPAID, PAID, REFUNDED
 
     // Dynamic Fare Fields
     private String pickupLocation;
@@ -53,12 +55,12 @@ public class Booking {
         this.userEmail = userEmail;
     }
 
-    public Vehicle getVehicle() {
-        return vehicle;
+    public Ride getRide() {
+        return ride;
     }
 
-    public void setVehicle(Vehicle vehicle) {
-        this.vehicle = vehicle;
+    public void setRide(Ride ride) {
+        this.ride = ride;
     }
 
     public int getSeats() {
@@ -83,6 +85,22 @@ public class Booking {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getPaymentMethod() {
+        return paymentMethod;
+    }
+
+    public void setPaymentMethod(String paymentMethod) {
+        this.paymentMethod = paymentMethod;
+    }
+
+    public String getPaymentStatus() {
+        return paymentStatus;
+    }
+
+    public void setPaymentStatus(String paymentStatus) {
+        this.paymentStatus = paymentStatus;
     }
 
     public Instant getCreatedAt() {

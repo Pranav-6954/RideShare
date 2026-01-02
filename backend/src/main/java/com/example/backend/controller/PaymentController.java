@@ -26,32 +26,22 @@ public class PaymentController {
     public Map<String, String> createPaymentIntent(@RequestBody Map<String, Object> data,
             org.springframework.security.core.Authentication auth) throws StripeException {
         System.out.println("PaymentController: Request received to create intent. Data: " + data);
-        
-        double amountDouble = 100.0;
-        try {
-            Object amtObj = data.get("amount");
-            if (amtObj != null) {
-                amountDouble = Double.parseDouble(amtObj.toString());
-            }
-        } catch (NumberFormatException e) {
-            System.err.println("Invalid amount received: " + data.get("amount"));
-        }
-
-        if (amountDouble < 1.0) amountDouble = 1.0; 
-        
-        long amountInPaise = Math.round(amountDouble * 100.0);
+        Integer amountINR = Integer.parseInt(data.getOrDefault("amount", 100).toString());
+        if (amountINR < 1)
+            amountINR = 1; // Stripe minimum is ~₹0.50, but let's be safe
 
         Long bookingId = data.containsKey("bookingId") ? Long.parseLong(data.get("bookingId").toString()) : null;
         String userEmail = (auth != null) ? auth.getName() : "anonymous";
-        System.out.println("PaymentController: Creating intent for Email: " + userEmail + ", Amount: " + amountDouble
+        System.out.println("PaymentController: Creating intent for Email: " + userEmail + ", Amount: " + amountINR
                 + ", BookingId: " + bookingId);
 
+        long amountInPaise = amountINR * 100L;
         System.out.println("PaymentController: Amount in Paise: " + amountInPaise);
 
         PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
                 .setAmount(amountInPaise)
                 .setCurrency("inr")
-                .setDescription("Ride Booking #" + bookingId)
+                .setDescription("Ride Booking Payment")
                 .setAutomaticPaymentMethods(
                         PaymentIntentCreateParams.AutomaticPaymentMethods.builder()
                                 .setEnabled(true)
@@ -61,12 +51,23 @@ public class PaymentController {
         PaymentIntent paymentIntent = PaymentIntent.create(params);
 
         // PERSISTENCE: Log the intent in our database
-        paymentService.logPaymentIntent(bookingId, userEmail, amountDouble, paymentIntent.getId());
+        paymentService.logPaymentIntent(bookingId, userEmail, (double) amountINR, paymentIntent.getId());
 
         Map<String, String> response = new HashMap<>();
         response.put("clientSecret", paymentIntent.getClientSecret());
 
         return response;
+    }
+
+
+    @PostMapping("/simulate")
+    public ResponseEntity<?> simulatePayment(@RequestBody Map<String, Object> data, org.springframework.security.core.Authentication auth) {
+        Long bookingId = data.containsKey("bookingId") ? Long.parseLong(data.get("bookingId").toString()) : null;
+        Double amount = Double.parseDouble(data.getOrDefault("amount", 0.0).toString());
+        String userEmail = (auth != null) ? auth.getName() : "anonymous";
+        
+        com.example.backend.model.Booking b = paymentService.simulatePayment(bookingId, userEmail, amount);
+        return ResponseEntity.ok(Map.of("success", true, "booking", b));
     }
 
     @PostMapping("/confirm")
@@ -84,12 +85,9 @@ public class PaymentController {
         return response;
     }
 
-    @GetMapping("/booking/{bookingId}")
-    public ResponseEntity<?> getPaymentByBookingId(@PathVariable Long bookingId) {
-        com.example.backend.model.Payment p = paymentService.getPaymentByBookingId(bookingId);
-        if (p == null) {
-            return ResponseEntity.status(404).body(Map.of("error", "Payment not found"));
-        }
-        return ResponseEntity.ok(p);
+    @GetMapping("/driver-history")
+    public java.util.List<com.example.backend.model.Payment> getDriverHistory(org.springframework.security.core.Authentication auth) {
+        if (auth == null) return java.util.List.of();
+        return paymentService.getDriverHistory(auth.getName());
     }
 }

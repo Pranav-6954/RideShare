@@ -25,7 +25,7 @@ public class AuthController {
             String name = (String) body.get("name");
             String email = (String) body.get("email");
             String password = (String) body.get("password");
-            String role = (String) body.getOrDefault("role", "user");
+            String role = (String) body.getOrDefault("role", "ROLE_USER");
             String gender = (String) body.getOrDefault("gender", "Other");
 
             User u = new User();
@@ -33,9 +33,16 @@ public class AuthController {
             u.setEmail(email);
             u.setPassword(password);
             u.setRole(role);
-
             u.setGender(gender);
             u.setProfileImage((String) body.getOrDefault("profileImage", ""));
+            u.setPhone((String) body.get("phone"));
+
+            // Driver details
+            u.setCarModel((String) body.get("carModel"));
+            u.setLicensePlate((String) body.get("licensePlate"));
+            if (body.containsKey("capacity")) {
+                u.setCapacity(Integer.parseInt(body.get("capacity").toString()));
+            }
 
             User saved = userService.register(u);
             return ResponseEntity
@@ -75,7 +82,11 @@ public class AuthController {
                 "name", u.getName(),
                 "role", u.getRole(),
                 "superAdmin", u.isSuperAdmin(),
-                "profileImage", u.getProfileImage() != null ? u.getProfileImage() : "")))
+                "profileImage", u.getProfileImage() != null ? u.getProfileImage() : "",
+                "phone", u.getPhone() != null ? u.getPhone() : "",
+                "carModel", u.getCarModel() != null ? u.getCarModel() : "",
+                "licensePlate", u.getLicensePlate() != null ? u.getLicensePlate() : "",
+                "capacity", u.getCapacity() != null ? u.getCapacity() : 0)))
                 .orElseGet(() -> ResponseEntity.status(404).body(Map.of("error", "User not found")));
     }
 }

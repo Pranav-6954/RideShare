@@ -1,12 +1,11 @@
 package com.example.backend.model;
 
 import jakarta.persistence.*;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Entity
 @Table(name = "notifications")
 public class Notification {
-
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -14,27 +13,65 @@ public class Notification {
     private String recipientEmail;
     private String message;
     private boolean isRead = false;
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private String type; // BOOKING_CONFIRMED, RIDE_UPDATE, REMINDER, etc.
 
-    public Notification() {}
+    private Instant createdAt = Instant.now();
 
-    public Notification(String recipientEmail, String message) {
+    public Notification() {
+    }
+
+    public Notification(String recipientEmail, String message, String type) {
         this.recipientEmail = recipientEmail;
+        this.message = message;
+        this.type = type;
+    }
+
+    // getters/setters
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getRecipientEmail() {
+        return recipientEmail;
+    }
+
+    public void setRecipientEmail(String recipientEmail) {
+        this.recipientEmail = recipientEmail;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
         this.message = message;
     }
 
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
+    public boolean isRead() {
+        return isRead;
+    }
 
-    public String getRecipientEmail() { return recipientEmail; }
-    public void setRecipientEmail(String recipientEmail) { this.recipientEmail = recipientEmail; }
+    public void setRead(boolean read) {
+        isRead = read;
+    }
 
-    public String getMessage() { return message; }
-    public void setMessage(String message) { this.message = message; }
+    public String getType() {
+        return type;
+    }
 
-    public boolean isRead() { return isRead; }
-    public void setRead(boolean read) { isRead = read; }
+    public void setType(String type) {
+        this.type = type;
+    }
 
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
+    }
 }
