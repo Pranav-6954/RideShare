@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { useNavigate, Link, useLocation } from "react-router-dom";
-import { saveToken, verifyJWT, apiFetch } from "../utils/jwt";
+import { useNavigate, Link } from "react-router-dom";
+import { saveToken, verifyJWT } from "../utils/jwt";
 
 const API = import.meta.env.VITE_API_BASE || "http://localhost:8084";
 
@@ -10,21 +10,14 @@ const Login = () => {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const nav = useNavigate();
-  const location = useLocation();
 
   useEffect(() => {
     const user = verifyJWT();
     if (user) {
-      apiFetch("/api/auth/me")
-        .then(data => {
-          const role = data.role ? data.role.toLowerCase() : "user";
-          if (role === "admin") nav("/dashboard");
-          else if (role === "driver") nav("/driver-dashboard");
-          else nav("/user-rides");
-        })
-        .catch(() => {
-          localStorage.removeItem("token");
-        });
+      if (user.role === "ROLE_ADMIN") nav("/dashboard");
+      else if (user.role === "ROLE_DRIVER") nav("/driver-dashboard");
+      else if (user.role === "ROLE_USER") nav("/user-rides");
+      // If none of the above, stay on login or wait for explicit action
     }
   }, [nav]);
 
@@ -39,86 +32,60 @@ const Login = () => {
         body: JSON.stringify({ email, password })
       });
 
-      const text = await res.text();
-      let data = null;
-      try { data = JSON.parse(text); } catch (e) { data = text; }
+      const data = await res.json();
 
       if (!res.ok) {
-        setErr((typeof data === 'object' && data?.error) ? data.error : "Login failed. Please check your credentials.");
-        setLoading(false);
+        setErr(data.error || "Login failed");
         return;
       }
 
       saveToken(data.token);
-      const role = data.role ? data.role.toLowerCase() : "user";
-
-      // Check for 'from' state to redirect back to intended page
-      const from = location.state?.from?.pathname + location.state?.from?.search || "";
-
-      if (from) {
-        nav(from, { replace: true });
-      } else if (role === "admin") {
-        nav("/dashboard");
-      } else if (role === "driver") {
-        nav("/driver-dashboard");
-      } else {
-        nav("/user-rides");
-      }
+      const role = data.role?.toUpperCase();
+      if (role === "ROLE_ADMIN") nav("/dashboard");
+      else if (role === "ROLE_DRIVER") nav("/driver-dashboard");
+      else if (role === "ROLE_USER") nav("/user-rides");
+      else nav("/login"); // Fallback
     } catch (error) {
-      setErr(error.message || "Network error. Please try again.");
+      setErr("Connection error. Please try again.");
+    } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="container flex items-center justify-center" style={{ minHeight: '80vh' }}>
-      <div className="glass-card fade-in" style={{ maxWidth: '450px', width: '100%' }}>
-        <div className="text-center mb-8">
-          <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem', background: 'linear-gradient(to right, var(--primary), var(--accent))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-            Welcome Back
-          </h1>
-          <p className="text-muted">Sign in to continue your journey</p>
+    <div className="container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '80vh' }}>
+      <div className="card glass animate-slide-up" style={{ maxWidth: '420px', width: '100%', padding: '3rem 2rem' }}>
+        <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🚗</div>
+          <h1 style={{ marginBottom: '0.5rem', fontSize: '2rem' }}>Welcome Back</h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>Access your personalized carpooling dashboard</p>
         </div>
 
         <form onSubmit={handleLogin}>
-          <div className="form-group">
-            <label className="label">Email Address</label>
-            <input
-              className="input"
-              type="email"
-              placeholder="name@example.com"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-            />
+          <div className="input-group">
+            <label className="label">Registered Email</label>
+            <input className="input" type="email" placeholder="john.doe@example.com" value={email} onChange={e => setEmail(e.target.value)} required />
           </div>
-          <div className="form-group">
-            <label className="label">Password</label>
-            <input
-              className="input"
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              required
-            />
+          <div className="input-group">
+            <label className="label">Private Password</label>
+            <input className="input" type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required />
           </div>
-
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem', marginTop: '1rem' }} disabled={loading}>
-            {loading ? "Signing in..." : "Sign In"}
+          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '1rem', marginTop: '1.5rem', fontSize: '1.1rem' }} disabled={loading}>
+            {loading ? "Authenticating..." : "Sign Into Account"}
           </button>
         </form>
 
         {err && (
-          <div className="badge badge-danger text-center mt-6" style={{ width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)' }}>
+          <div className="badge badge-danger animate-slide-up" style={{ display: 'block', marginTop: '1.5rem', textAlign: 'center', padding: '0.75rem', textTransform: 'none' }}>
             {err}
           </div>
         )}
 
-        <div className="text-center mt-8">
-          <p className="text-muted">
-            Don't have an account? <Link to="/register" style={{ color: 'var(--primary)', fontWeight: '600', textDecoration: 'none' }}>Create Account</Link>
-          </p>
+        <div className="text-center" style={{ marginTop: '2.5rem', fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+          Don't have an account yet?
+          <Link to="/register" style={{ color: 'var(--primary)', fontWeight: '700', textDecoration: 'none', marginLeft: '0.5rem' }}>
+            Register Now
+          </Link>
         </div>
       </div>
     </div>
@@ -126,4 +93,3 @@ const Login = () => {
 };
 
 export default Login;
-

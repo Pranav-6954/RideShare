@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { apiFetch } from "../utils/jwt";
+import { apiFetch, verifyJWT, getToken } from "../utils/jwt";
 import Pagination from "../common/Pagination";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "../common/ToastContainer";
 
-const UserBookings = () => {
+const BookingHistory = () => {
   const nav = useNavigate();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,40 +18,24 @@ const UserBookings = () => {
 
   const fetchBookings = () => {
     setLoading(true);
+    // Fetch all bookings and filter client-side for now
     apiFetch("/api/bookings/me")
       .then(data => {
-        // Keep only ACTIVE statuses
-        // COMPLETED, PAID, DRIVER_COMPLETED should move to History
-        const recent = data.filter(b =>
-          ["PENDING", "ACCEPTED", "PAYMENT_PENDING", "CASH_PAYMENT_PENDING"].includes(b.status)
+        if (!Array.isArray(data)) {
+          setBookings([]);
+          return;
+        }
+        // Keep only history statuses
+        const history = data.filter(b =>
+          ["COMPLETED", "PAID", "REJECTED", "CANCELLED", "DRIVER_COMPLETED"].includes(b.status)
         );
-        setBookings(recent);
+        setBookings(history);
       })
       .catch(() => setBookings([]))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { fetchBookings(); }, []);
-
-  const getDaysLeft = (dateStr) => {
-    if (!dateStr) return null;
-    const rideDate = new Date(dateStr);
-    const today = new Date();
-
-    // Normalize both to midnight local time to compare purely dates
-    rideDate.setHours(0, 0, 0, 0);
-    today.setHours(0, 0, 0, 0);
-
-    // Handle timezone offset issues by treating the string as local date components
-    // If dateStr is "2025-12-31", new Date() might parse as UTC. 
-    // Safer: Parse YYYY-MM-DD manually
-    const [y, m, d] = dateStr.split('-').map(Number);
-    const rideLocal = new Date(y, m - 1, d); // Local midnight
-
-    const diffTime = rideLocal - today;
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
-  };
 
   const handleReviewSubmit = async (e) => {
     e.preventDefault();
@@ -78,17 +62,7 @@ const UserBookings = () => {
     }
   };
 
-  const handleConfirmDropoff = async (id) => {
-    try {
-      await apiFetch(`/api/bookings/${id}/confirm-dropoff`, { method: 'PUT' });
-      showToast("Drop-off Confirmed!", 'success');
-      fetchBookings();
-    } catch (err) {
-      showToast(err.message || "Failed to confirm", 'error');
-    }
-  };
-
-  if (loading) return <div className="container" style={{ padding: '4rem', textAlign: 'center' }}>Loading your journeys...</div>;
+  if (loading) return <div className="container" style={{ padding: '4rem', textAlign: 'center' }}>Loading your history...</div>;
 
   const paginatedBookings = bookings.slice(
     (currentPage - 1) * itemsPerPage,
@@ -99,37 +73,32 @@ const UserBookings = () => {
     <div className="container" style={{ paddingBottom: '5rem' }}>
       <div className="animate-slide-up" style={{ marginBottom: '3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
-          <h1 style={{ marginBottom: '0.5rem' }}>My Recent Bookings</h1>
-          <p style={{ color: 'var(--text-muted)' }}>Manage your bookings and share your experience</p>
+          <h1 style={{ marginBottom: '0.5rem' }}>Booking History</h1>
+          <p style={{ color: 'var(--text-muted)' }}>Your past rides and cancellations</p>
         </div>
         <button className="btn btn-outline" onClick={() => nav('/my-reviews')}>View My Feedback</button>
       </div>
 
       {bookings.length === 0 ? (
         <div className="card glass animate-slide-up" style={{ textAlign: 'center', padding: '5rem 2rem' }}>
-          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🚗</div>
-          <h3>No journeys found</h3>
-          <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>Start your adventure by booking a ride today.</p>
-          <button className="btn btn-primary" onClick={() => window.location.href = '/user-rides'}>Find a Ride</button>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📜</div>
+          <h3>No history found</h3>
+          <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>You haven't completed any rides yet.</p>
+          <button className="btn btn-primary" onClick={() => nav('/user-rides')}>Find a Ride</button>
         </div>
       ) : (
         <>
           <div className="grid" style={{ gridTemplateColumns: '1fr', gap: '1.5rem' }}>
             {paginatedBookings.map((b, idx) => {
-              const daysLeft = getDaysLeft(b.ride?.date);
-              const isCompleted = daysLeft < 0;
               return (
-                <div key={b.id} className="card glass animate-slide-up" style={{ padding: '1.5rem', animationDelay: `${idx * 0.1}s` }}>
+                <div key={b.id} className="card glass animate-slide-up" style={{ padding: '1.5rem', animationDelay: `${idx * 0.1}s`, opacity: 0.8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
                     <div style={{ flex: 1, minWidth: '250px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                        <span className={`badge badge-${(b.status === 'ACCEPTED' || b.status === "PAID" || b.status === "COMPLETED") ? 'success' : b.status === 'PENDING' ? 'warning' : b.status.includes('COMPLETED') ? 'info' : 'danger'}`}>
-                          {b.status === 'COMPLETED' ? "Ride Complete & Payment Done" :
-                            b.status === 'CASH_PAYMENT_PENDING' ? "Waiting for Cash Payment" :
-                              b.status === 'DRIVER_COMPLETED' ? "Ride is Completed" :
-                                b.status.replace('_', ' ')}
+                        <span className={`badge badge-${(b.status === 'ACCEPTED' || b.status === "PAID" || b.status === "COMPLETED") ? 'success' : b.status === 'PENDING' ? 'warning' : 'danger'}`}>
+                          {b.status === 'COMPLETED' ? "Ride Complete & Payment Done" : b.status.replace('_', ' ')}
                         </span>
-                        {isCompleted && b.status === 'COMPLETED' && <span className="badge" style={{ background: 'var(--neutral-100)' }}>Past Journey</span>}
+                        <span className="badge" style={{ background: 'var(--neutral-100)' }}>Past Journey</span>
                       </div>
 
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1.5rem', marginBottom: '1.5rem' }}>
@@ -158,37 +127,17 @@ const UserBookings = () => {
                     </div>
 
                     <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                      {(b.status === 'COMPLETED' || b.status === "PAID") && !reviewing && (
-                        <button className="btn btn-primary" onClick={() => setReviewing(b.id)}>⭐ Rate Driver</button>
-                      )}
-
-                      {/* Stripe Payment Button */}
-                      {(b.status === 'PAYMENT_PENDING' || (b.status === 'DRIVER_COMPLETED' && b.paymentMethod !== 'CASH')) && (
-                        <button className="btn btn-warning" onClick={() => nav('/payment', { state: { amount: b.totalPrice, bookingId: b.id } })}>
-                          💳 Pay ₹{b.totalPrice}
-                        </button>
-                      )}
-                      {(b.status === 'REJECTED') && (
-                        <button className="btn btn-outline" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={() => setReviewing(b.id)}>Report Issue</button>
-                      )}
-
-                      {/* Cash Payment Instruction */}
-                      {(b.status === 'CASH_PAYMENT_PENDING' || (b.status === 'DRIVER_COMPLETED' && b.paymentMethod === 'CASH')) && (
-                        <div style={{ padding: '0.5rem', border: '1px dashed var(--warning)', borderRadius: '8px', color: 'var(--warning)', fontSize: '0.9rem', textAlign: 'center' }}>
-                          ⏳ Please pay cash to Driver. Waiting for Driver confirmation.
-                        </div>
-                      )}
-
                       {b.ride?.driverPhone && (
                         <div style={{ fontSize: '0.85rem' }}>
                           <div style={{ opacity: 0.6, marginBottom: '2px' }}>Driver Contact</div>
                           <div style={{ fontWeight: 600 }}>{b.ride.driverPhone}</div>
                         </div>
                       )}
-                      {!isCompleted && daysLeft !== null && (
-                        <div style={{ fontSize: '0.85rem', color: daysLeft <= 1 ? 'var(--danger)' : 'var(--success)', fontWeight: 700 }}>
-                          {daysLeft === 0 ? "Leaving Today!" : `${daysLeft} days to go`}
-                        </div>
+
+                      {(b.status === 'COMPLETED' || b.status === 'PAID' || b.status === 'DRIVER_COMPLETED') && !reviewing && (
+                        <button className="btn btn-primary" style={{ marginTop: '0.5rem', width: '100%' }} onClick={() => setReviewing(b.id)}>
+                          ⭐ Rate Driver
+                        </button>
                       )}
                     </div>
                   </div>
@@ -249,4 +198,4 @@ const UserBookings = () => {
   );
 };
 
-export default UserBookings;
+export default BookingHistory;

@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { apiFetch, verifyJWT } from "../utils/jwt";
 import { useNavigate, useParams } from "react-router-dom";
+import { useToast } from "../common/ToastContainer";
 
 const AddVehicle = () => {
   const { id } = useParams();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
   const [price, setPrice] = useState("");
   const [tickets, setTickets] = useState("");
   const [type, setType] = useState("");
@@ -14,28 +16,25 @@ const AddVehicle = () => {
   const [route, setRoute] = useState("");
   const [reservedSeats, setReservedSeats] = useState(0);
   const [phone, setPhone] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [newStop, setNewStop] = useState("");
 
   const nav = useNavigate();
   const isEdit = !!id;
+  const { showToast } = useToast();
+
   const [recommendedPrice, setRecommendedPrice] = useState(0);
-  const [manualRoute, setManualRoute] = useState(false);
 
   useEffect(() => {
     if (from && to) {
       const timer = setTimeout(() => {
-        // We only send the route if the user purposefully edited it, 
-        // otherwise let backend suggest a route for this pair.
-        const body = { fromLocation: from, toLocation: to };
-        if (manualRoute) body.viaRoute = route;
-
         apiFetch("/api/fare/calculate", {
           method: "POST",
-          body: JSON.stringify(body)
+          body: JSON.stringify({ fromLocation: from, toLocation: to, viaRoute: route })
         })
           .then(data => {
             setRecommendedPrice(data.recommendedPrice);
-            // ONLY auto-suggest route if user hasn't manually edited yet
-            if (data.suggestedRoute && (!route || !manualRoute)) {
+            if (data.suggestedRoute && !route) {
               setRoute(data.suggestedRoute);
             }
           })
@@ -43,44 +42,42 @@ const AddVehicle = () => {
       }, 800);
       return () => clearTimeout(timer);
     }
-  }, [from, to]); // REMOVED route from dependencies to prevent infinite loop
+  }, [from, to, route]);
 
   useEffect(() => {
     if (isEdit) {
-      apiFetch(`/api/vehicles/${id}`).then(v => {
+      apiFetch(`/api/rides/${id}`).then(v => {
         setFrom(v.fromLocation);
         setTo(v.toLocation);
         setDate(v.date);
+        setTime(v.time || "");
         setPrice(v.price);
         setTickets(v.tickets);
         setType(v.vehicleType);
         setImageUrl(v.imageUrl || "");
         setRoute(v.route || "");
         setPhone(v.driverPhone || "");
-        setManualRoute(true); // Edit mode usually has a saved route
-
         apiFetch("/api/fare/calculate", {
           method: "POST",
-          body: JSON.stringify({ fromLocation: v.fromLocation, toLocation: v.toLocation, viaRoute: v.route })
+          body: JSON.stringify({ fromLocation: v.fromLocation, toLocation: v.toLocation })
         }).then(d => setRecommendedPrice(d.recommendedPrice)).catch(console.error);
-      }).catch(err => {
-        alert("Failed to load vehicle details");
-        nav("/admin/vehicles");
       });
     }
-  }, [id, isEdit, nav]);
+  }, [id, isEdit]);
 
   const submit = async (e) => {
     e.preventDefault();
-    if (recommendedPrice > 0 && Number(price) > recommendedPrice) {
-      const proceed = window.confirm(`Your price (₹${price}) is higher than the recommended fare (₹${recommendedPrice}). High prices may result in fewer bookings. Do you want to proceed?`);
-      if (!proceed) return;
+    if (Number(price) > recommendedPrice) {
+      showToast(`Price cannot exceed the recommended fare of ₹${recommendedPrice}`, 'error');
+      return;
     }
+    setLoading(true);
     try {
       const body = {
         fromLocation: from,
         toLocation: to,
         date,
+        time,
         price: Number(price),
         tickets: Number(tickets),
         vehicleType: type,
@@ -91,178 +88,131 @@ const AddVehicle = () => {
       };
 
       if (isEdit) {
-        await apiFetch(`/api/vehicles/${id}`, { method: "PUT", body: JSON.stringify(body) });
+        await apiFetch(`/api/rides/${id}`, { method: "PUT", body: JSON.stringify(body) });
+        showToast('Ride updated successfully!', 'success');
       } else {
-        await apiFetch("/api/vehicles", { method: "POST", body: JSON.stringify(body) });
+        await apiFetch("/api/rides", { method: "POST", body: JSON.stringify(body) });
+        showToast('Ride posted successfully!', 'success');
       }
       const user = verifyJWT();
-      if (user?.role === "driver") nav("/driver-dashboard");
+      if (user?.role === "ROLE_DRIVER") nav("/driver-dashboard");
       else nav("/admin/vehicles");
-    } catch (err) { alert(err.message || "Error"); }
+    } catch (err) {
+      showToast(err.message || "Error saving ride", 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Helper functions for route chips
   const addStop = () => {
     if (newStop) {
       const stops = route ? route.split(" -> ") : [];
-      // Insert before destination (if exists in list, else append)
-      // Logic: we want the list to be distinct. 
-      // Current simulation: "From -> Stop1 -> Stop2 -> To".
-      // We will rebuild the string.
-      // Easiest is to treat "route" string as the source of truth.
       if (!stops.includes(newStop)) {
-        if (stops.length >= 2) {
-          stops.splice(stops.length - 1, 0, newStop);
-        } else {
-          stops.push(newStop);
-        }
+        if (stops.length >= 2) stops.splice(stops.length - 1, 0, newStop);
+        else stops.push(newStop);
         setRoute(stops.join(" -> "));
       }
-      setManualRoute(true);
       setNewStop("");
     }
   };
 
   const removeStop = (stopToRemove) => {
-    const stops = route.split(" -> ");
-    const newStops = stops.filter(s => s !== stopToRemove);
-    setRoute(newStops.join(" -> "));
-    setManualRoute(true);
+    const stops = route.split(" -> ").filter(s => s !== stopToRemove);
+    setRoute(stops.join(" -> "));
   };
 
-  // Local state for the "Add stop" input
-  const [newStop, setNewStop] = useState("");
-
   return (
-    <div className="container mt-4">
-      <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
-        <h2 className="mb-4 text-center">{isEdit ? "Edit Ride" : "Add New Ride"}</h2>
+    <div className="container" style={{ paddingBottom: '4rem' }}>
+      <div className="card glass animate-slide-up" style={{ maxWidth: '700px', margin: '0 auto', padding: '2.5rem' }}>
+        <h2 className="text-center" style={{ marginBottom: '2rem' }}>{isEdit ? "Update Your Ride" : "Post a New Ride"}</h2>
+
         <form onSubmit={submit}>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="form-group">
-              <label className="label">From Location</label>
-              <input className="input" placeholder="e.g. New York" value={from} onChange={e => setFrom(e.target.value)} required />
+          <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+            <div className="input-group">
+              <label className="label">Leaving From</label>
+              <input className="input" placeholder="e.g. London" value={from} onChange={e => setFrom(e.target.value)} required />
             </div>
-            <div className="form-group">
-              <label className="label">To Location</label>
-              <input className="input" placeholder="e.g. Boston" value={to} onChange={e => setTo(e.target.value)} required />
+            <div className="input-group">
+              <label className="label">Heading To</label>
+              <input className="input" placeholder="e.g. Manchester" value={to} onChange={e => setTo(e.target.value)} required />
             </div>
           </div>
 
-          {/* Via Route Input with Map Button */}
-          <div className="form-group">
-            <div className="flex justify-between items-center mb-1">
-              <label className="label mb-0">Via Route (Waypoints)</label>
-              <div className="flex gap-2">
-                {manualRoute && (
-                  <button
-                    type="button"
-                    className="btn btn-xs btn-outline btn-warning"
-                    onClick={() => { setRoute(""); setManualRoute(false); }}
-                  >
-                    🔄 Reset suggestions
-                  </button>
-                )}
-                {(from && to) && (
-                  <a
-                    href={`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(from)}&destination=${encodeURIComponent(to)}&waypoints=${encodeURIComponent(route.split(' -> ').slice(1, -1).join('|'))}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn btn-xs btn-outline btn-primary"
-                    title="View Route on Google Maps"
-                  >
-                    🗺️ View Map
-                  </a>
-                )}
-              </div>
+          <div className="input-group">
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <label className="label" style={{ marginBottom: 0 }}>Route Stops</label>
+              {from && to && (
+                <a href={`https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(from)}&destination=${encodeURIComponent(to)}`}
+                  target="_blank" rel="noreferrer" style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600 }}>View on Maps →</a>
+              )}
             </div>
-
-            <div className="p-2 border rounded bg-gray-50 flex flex-wrap gap-2 min-h-[45px]">
-              {/* Start Point */}
-              <span className="badge badge-primary font-bold">{from || "?"}</span>
-              <span className="text-gray-400">→</span>
-
-              {/* Chips */}
-              {route.split(" -> ").slice(1, -1).map((stop, i) => (
-                <React.Fragment key={i}>
-                  <div className="badge badge-secondary gap-1 pr-1">
+            <div style={{ padding: '1rem', background: 'var(--neutral-50)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+                <span className="badge badge-success">{from || "?"}</span>
+                {route.split(" -> ").slice(1, -1).map((stop, i) => (
+                  <div key={i} className="badge badge-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     {stop}
-                    <button type="button" onClick={() => removeStop(stop)} className="btn btn-ghost btn-xs text-white hover:bg-red-600 circle h-4 w-4 min-h-0 p-0 flex items-center justify-center rounded-full leading-none">×</button>
+                    <span style={{ cursor: 'pointer', fontWeight: 800 }} onClick={() => removeStop(stop)}>×</span>
                   </div>
-                  <span className="text-gray-400">→</span>
-                </React.Fragment>
-              ))}
-
-              {/* End Point */}
-              <span className="badge badge-primary font-bold">{to || "?"}</span>
-
-              <div className="flex items-center gap-1 ml-auto">
-                <input
-                  className="input input-xs border-gray-300 w-32"
-                  placeholder="+ Stop"
-                  value={newStop}
-                  onChange={e => setNewStop(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addStop(); } }}
-                />
-                <button type="button" onClick={addStop} className="btn btn-xs btn-success">+</button>
+                ))}
+                <span className="badge badge-success">{to || "?"}</span>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input className="input" style={{ marginBottom: 0, padding: '0.4rem 1rem' }} placeholder="Add a stop..." value={newStop} onChange={e => setNewStop(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addStop(); } }} />
+                <button type="button" className="btn btn-outline" style={{ padding: '0.5rem 1rem' }} onClick={addStop}>Add</button>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div className="form-group">
+          <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
+            <div className="input-group">
               <label className="label">Date</label>
               <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} required />
             </div>
-            <div className="form-group">
-              <label className="label">Vehicle Type</label>
-              <input className="input" placeholder="e.g. Bus, Van, Sedan" value={type} onChange={e => setType(e.target.value)} required />
+            <div className="input-group">
+              <label className="label">Departure Time</label>
+              <input className="input" type="time" value={time} onChange={e => setTime(e.target.value)} required />
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div className="form-group">
-              <label className="label">Price</label>
-              <input
-                className="input"
-                type="number"
-                step="0.01"
-                placeholder="0.00"
-                value={price}
-                onChange={e => setPrice(e.target.value)}
-                required
-              />
+          <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+            <div className="input-group">
+              <label className="label">Vehicle Description</label>
+              <input className="input" placeholder="e.g. Silver Toyota Camry" value={type} onChange={e => setType(e.target.value)} required />
+            </div>
+            <div className="input-group">
+              <label className="label">Price per Seat</label>
+              <input className="input" type="number" step="0.01" value={price} onChange={e => setPrice(e.target.value)} required />
               {recommendedPrice > 0 && (
-                <small className="block mt-1 text-sm font-bold text-success">
-                  Max Recommended Price: ₹{recommendedPrice}
-                </small>
-              )}
-              {price > recommendedPrice && recommendedPrice > 0 && (
-                <small className="block mt-1 text-sm font-bold text-danger">
-                  Error: Price cannot exceed ₹{recommendedPrice}
-                </small>
+                <div style={{ fontSize: '0.8rem', marginTop: '4px', color: price > recommendedPrice ? 'var(--danger)' : 'var(--success)', fontWeight: 600 }}>
+                  Recommended: Max ₹{recommendedPrice}
+                </div>
               )}
             </div>
-            <div className="form-group">
-              <label className="label">Available Seats (Total)</label>
-              <input className="input" type="number" placeholder="e.g. 40" value={tickets} onChange={e => setTickets(e.target.value)} required />
+          </div>
+
+          <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+            <div className="input-group">
+              <label className="label">Total Capacity</label>
+              <input className="input" type="number" value={tickets} onChange={e => setTickets(e.target.value)} required />
             </div>
-            <div className="form-group">
-              <label className="label">Mobile Number</label>
-              <input className="input" placeholder="e.g. +1234567890" value={phone} onChange={e => setPhone(e.target.value)} required />
+          </div>
+
+          <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+            <div className="input-group">
+              <label className="label">Contact Number</label>
+              <input className="input" placeholder="+1234567890" value={phone} onChange={e => setPhone(e.target.value)} required />
             </div>
-            <div className="form-group">
+            <div className="input-group">
               <label className="label">Reserve for Self</label>
-              <input className="input" type="number" min="0" max={tickets} value={reservedSeats} onChange={e => setReservedSeats(e.target.value)} />
+              <input className="input" type="number" min="0" value={reservedSeats} onChange={e => setReservedSeats(e.target.value)} />
             </div>
           </div>
 
-          <div className="form-group">
-            <label className="label">Image URL (Optional)</label>
-            <input className="input" placeholder="https://example.com/bus.jpg" value={imageUrl} onChange={e => setImageUrl(e.target.value)} />
-          </div>
-
-          <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>{isEdit ? "Update Ride" : "Add Ride"}</button>
+          <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '1.5rem' }} disabled={loading}>
+            {loading ? "Saving Ride..." : isEdit ? "Update Ride" : "Post Ride"}
+          </button>
         </form>
       </div>
     </div>

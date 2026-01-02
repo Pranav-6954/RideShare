@@ -7,9 +7,10 @@ const ProtectedRoute = ({ allowedRoles = [], children }) => {
   const user = verifyJWT(token);
   const location = useLocation();
   if (!user) return <Navigate to="/login" state={{ from: location }} replace />;
-  if (!allowedRoles.includes(user.role)) {
-    if (user.role === "admin") return <Navigate to="/dashboard" replace />;
-    if (user.role === "user") return <Navigate to="/user-rides" replace />;
+  if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
+    if (user.role === "ROLE_ADMIN") return <Navigate to="/dashboard" replace />;
+    if (user.role === "ROLE_USER") return <Navigate to="/user-rides" replace />;
+    if (user.role === "ROLE_DRIVER") return <Navigate to="/driver-dashboard" replace />;
     return <Navigate to="/login" replace />;
   }
   return children;
