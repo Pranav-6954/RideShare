@@ -11,7 +11,7 @@ const DriverReserve = () => {
     const [error, setError] = useState("");
 
     useEffect(() => {
-        apiFetch(`/api/vehicles/${id}`)
+        apiFetch(`/api/rides/${id}`)
             .then((data) => {
                 setRide(data);
                 setLoading(false);
@@ -28,7 +28,7 @@ const DriverReserve = () => {
             await apiFetch("/api/bookings", {
                 method: "POST",
                 body: JSON.stringify({
-                    vehicleId: ride.id,
+                    rideId: ride.id,
                     seats: parseInt(seats),
                     passengers: [{ name: "Driver Reserved", age: 0, gender: "N/A" }]
                 })
@@ -39,22 +39,29 @@ const DriverReserve = () => {
         }
     };
 
-    if (loading) return <div className="container mt-4 text-center">Loading...</div>;
-    if (error) return <div className="container mt-4 text-center text-danger">Error: {error}</div>;
-    if (!ride) return <div className="container mt-4 text-center">Ride not found</div>;
+    if (loading) return <div className="container" style={{ padding: '5rem', textAlign: 'center' }}><h3>Consulting transit database...</h3></div>;
+    if (error) return <div className="container"><div className="badge badge-danger">Operation Error: {error}</div></div>;
+    if (!ride) return <div className="container" style={{ textAlign: 'center' }}><h3>Transit record not found.</h3></div>;
 
     return (
-        <div className="container mt-4">
-            <div className="card" style={{ maxWidth: '500px', margin: '0 auto' }}>
-                <h2 className="text-center mb-4">Reserve Seats</h2>
-                <div className="mb-4">
-                    <p><strong>Route:</strong> {ride.fromLocation} &rarr; {ride.toLocation}</p>
-                    <p><strong>Available Seats:</strong> {ride.tickets}</p>
+        <div className="container" style={{ paddingBottom: '5rem', maxWidth: '600px' }}>
+            <div className="animate-slide-up" style={{ marginBottom: '2.5rem', textAlign: 'center' }}>
+                <h1 style={{ marginBottom: '0.5rem' }}>Reserve Inventory</h1>
+                <p style={{ color: 'var(--text-muted)' }}>Block seats for offline passengers or personal use</p>
+            </div>
+
+            <div className="card glass animate-slide-up" style={{ padding: '2.5rem' }}>
+                <div style={{ marginBottom: '2rem', padding: '1.5rem', background: 'rgba(var(--primary-rgb), 0.05)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--primary)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Target Ride</div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{ride.fromLocation} → {ride.toLocation}</div>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                        📅 {ride.date} | <span className="badge badge-primary">{ride.tickets} Seats Available</span>
+                    </div>
                 </div>
 
                 <form onSubmit={handleSubmit}>
-                    <div className="form-group">
-                        <label className="label">Number of seats to reserve for yourself/offline:</label>
+                    <div className="input-group">
+                        <label className="label">Reservation Capacity</label>
                         <input
                             type="number"
                             className="input"
@@ -64,8 +71,15 @@ const DriverReserve = () => {
                             onChange={(e) => setSeats(e.target.value)}
                             required
                         />
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                            These seats will be marked as "Reserved" and removed from public listing.
+                        </p>
                     </div>
-                    <button type="submit" className="btn btn-warning w-100">Confirm Reservation</button>
+
+                    <div style={{ display: 'flex', gap: '1rem', marginTop: '2.5rem' }}>
+                        <button type="button" className="btn btn-outline" style={{ flex: 1 }} onClick={() => nav(-1)}>Cancel</button>
+                        <button type="submit" className="btn btn-primary" style={{ flex: 2 }}>Execute Reservation</button>
+                    </div>
                 </form>
             </div>
         </div>

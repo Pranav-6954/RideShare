@@ -19,7 +19,8 @@ const TransactionHistory = () => {
                         <tr>
                             <th>ID</th>
                             <th>Booking ID</th>
-                            <th>Payment Intent</th>
+                            <th>Order ID</th>
+                            <th>Payment ID</th>
                             <th>Amount</th>
                             <th>Status</th>
                         </tr>
@@ -30,7 +31,8 @@ const TransactionHistory = () => {
                             <tr key={p.id}>
                                 <td>{p.id}</td>
                                 <td>{p.bookingId}</td>
-                                <td>{p.stripePaymentIntentId || "-"}</td>
+                                <td>{p.razorpayOrderId}</td>
+                                <td>{p.razorpayPaymentId || "-"}</td>
                                 <td>₹{p.amount}</td>
                                 <td>
                                     <span className={`badge ${p.status === "PAID" ? "success" : "warning"}`}>

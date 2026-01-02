@@ -4,11 +4,18 @@ import SockJS from "sockjs-client";
 import { Client } from "@stomp/stompjs";
 import { apiFetch, verifyJWT } from "../utils/jwt";
 import StarRating from "../common/StarRating";
+import { useToast } from "../common/ToastContainer";
+import ConfirmModal from "../common/ConfirmModal";
 
 const DriverDashboard = () => {
     const nav = useNavigate();
     const token = localStorage.getItem("token");
     const user = verifyJWT(token);
+    const { showToast } = useToast();
+
+    useEffect(() => {
+        if (!user) nav("/login");
+    }, [user, nav]);
 
     const [bookings, setBookings] = useState([]);
     const [stats, setStats] = useState({ total: 0, pending: 0, confirmed: 0 });
@@ -18,6 +25,7 @@ const DriverDashboard = () => {
     const [loadingRides, setLoadingRides] = useState(false);
 
     const [errorMsg, setErrorMsg] = useState("");
+    const [statusMsg, setStatusMsg] = useState({ type: "", text: "" });
     const [searchText, setSearchText] = useState("");
     const [sortOrder, setSortOrder] = useState("desc");
 
@@ -31,12 +39,38 @@ const DriverDashboard = () => {
     const [comment, setComment] = useState("");
     const itemsPerPage = 5;
 
+    // Confirm Modal State
+    const [confirmModal, setConfirmModal] = useState({
+        isOpen: false,
+        title: "",
+        message: "",
+        onConfirm: null,
+        type: "primary",
+        confirmText: "Confirm"
+    });
+
+    const closeConfirm = () => setConfirmModal(prev => ({ ...prev, isOpen: false }));
+
+    const openConfirm = (title, message, onConfirm, type = "primary", confirmText = "Confirm") => {
+        setConfirmModal({
+            isOpen: true,
+            title,
+            message,
+            onConfirm: () => {
+                onConfirm();
+                closeConfirm();
+            },
+            type,
+            confirmText
+        });
+    };
+
     // WebSocket Connection
     useEffect(() => {
-        if (!user || user.role !== "driver") return;
+        if (!user || user.role !== "ROLE_DRIVER") return;
 
         const client = new Client({
-            webSocketFactory: () => new SockJS("http://localhost:8084/ws"),
+            webSocketFactory: () => new SockJS(`${import.meta.env.VITE_API_BASE || "http://localhost:8084"}/ws`),
             onConnect: () => {
                 client.subscribe("/topic/driver/" + user.email, (msg) => {
                     setStatusMsg({ type: "success", text: "New Request: " + msg.body });
@@ -49,24 +83,9 @@ const DriverDashboard = () => {
         client.activate();
 
         return () => {
-            client.deactivate();
+            try { client.deactivate(); } catch (e) { }
         };
     }, []);
-
-    // Derived state for filtering and sorting
-    const filteredBookings = bookings
-        .filter(b => {
-            const name = b.passengers && b.passengers.length > 0 ? b.passengers[0].name : "Unknown";
-            return name.toLowerCase().includes(searchText.toLowerCase()) ||
-                b.userEmail.toLowerCase().includes(searchText.toLowerCase());
-        })
-        .sort((a, b) => {
-            const dateA = new Date(a.vehicle?.date || 0);
-            const dateB = new Date(b.vehicle?.date || 0);
-            return sortOrder === "asc" ? dateA - dateB : dateB - dateA;
-        });
-
-    const toggleSort = () => setSortOrder(prev => prev === "asc" ? "desc" : "asc");
 
     const fetchBookings = async () => {
         setLoadingRides(true);
@@ -77,12 +96,12 @@ const DriverDashboard = () => {
             setBookings(bookingData);
             const total = bookingData.length;
             const pending = bookingData.filter(b => b.status === "PENDING").length;
-            const confirmed = bookingData.filter(b => b.status === "CONFIRMED").length;
+            const confirmed = bookingData.filter(b => b.status === "ACCEPTED" || b.status === "PAID").length;
             setStats({ total, pending, confirmed });
 
             // Fetch My Rides
-            const rideData = await apiFetch("/api/vehicles/driver-posts");
-            setMyRides(rideData);
+            const rideData = await apiFetch("/api/rides/driver-posts");
+            setMyRides(rideData.filter(r => r.status === "OPEN"));
 
             // Fetch My Reviews
             const reviewData = await apiFetch(`/api/reviews/user/${user.email}`);
@@ -98,7 +117,23 @@ const DriverDashboard = () => {
 
     useEffect(() => { fetchBookings(); }, []);
 
-    const [statusMsg, setStatusMsg] = useState({ type: "", text: "" });
+    // toggleSort definition
+    const toggleSort = () => setSortOrder(prev => prev === "asc" ? "desc" : "asc");
+
+    // Derived state for filtering and sorting
+    const filteredBookings = bookings
+        .filter(b => {
+            const name = b.passengers && b.passengers.length > 0 ? b.passengers[0].name : (b.userEmail || "Unknown");
+            return (name && name.toLowerCase().includes(searchText.toLowerCase())) ||
+                (b.userEmail && b.userEmail.toLowerCase().includes(searchText.toLowerCase()));
+        })
+        .sort((a, b) => {
+            // Sort by Booking Creation Date (Newest Request First)
+            // Fallback to ID if date is missing
+            const timeA = a.createdAt ? new Date(a.createdAt).getTime() : a.id;
+            const timeB = b.createdAt ? new Date(b.createdAt).getTime() : b.id;
+            return sortOrder === "asc" ? timeA - timeB : timeB - timeA;
+        });
 
     // Auto-clear message after 3 seconds
     useEffect(() => {
@@ -107,6 +142,18 @@ const DriverDashboard = () => {
             return () => clearTimeout(timer);
         }
     }, [statusMsg]);
+
+    const getStatusLabel = (b) => {
+        if (b.status === "DRIVER_COMPLETED") return "Ride Completed";
+        if (b.status === "PAYMENT_PENDING") return "Payment Pending";
+        if (b.status === "CASH_PAYMENT_PENDING") return "Cash Payment Pending";
+        if (b.status === "PAID" || b.status === "COMPLETED") return "Payment Completed";
+        if (b.status === "ACCEPTED") return "Accepted";
+        if (b.status === "PENDING") return "Pending Approval";
+        return b.status; // Fallback
+    };
+
+    // ... updateStatus ...
 
     const updateStatus = async (id, status) => {
         try {
@@ -119,6 +166,46 @@ const DriverDashboard = () => {
         } catch (err) {
             setStatusMsg({ type: "error", text: "Failed to update: " + err.message });
         }
+    };
+
+
+
+    const handleCompleteRide = async (rideId) => {
+        openConfirm(
+            "Complete Ride?",
+            "Mark this ride as COMPLETED? This will notify passengers to confirm drop-off.",
+            async () => {
+                try {
+                    await apiFetch(`/api/rides/${rideId}/complete`, {
+                        method: "PUT",
+                    });
+                    setStatusMsg({ type: "success", text: "Ride marked as Completed!" });
+                    fetchBookings();
+                } catch (err) {
+                    setStatusMsg({ type: "error", text: "Failed to complete ride: " + err.message });
+                }
+            },
+            "primary",
+            "Mark Completed"
+        );
+    };
+
+    const handleConfirmCash = async (bookingId) => {
+        openConfirm(
+            "Confirm Cash Payment",
+            "Confirm you received CASH payment from this passenger?",
+            async () => {
+                try {
+                    await apiFetch(`/api/bookings/${bookingId}/confirm-cash`, { method: "PUT" });
+                    setStatusMsg({ type: "success", text: "Payment Confirmed!" });
+                    fetchBookings();
+                } catch (err) {
+                    setStatusMsg({ type: "error", text: "Failed to confirm cash: " + err.message });
+                }
+            },
+            "success",
+            "Confirm Received"
+        );
     };
 
     const handleOpenRate = (booking) => {
@@ -134,34 +221,27 @@ const DriverDashboard = () => {
             await apiFetch("/api/reviews", {
                 method: "POST",
                 body: JSON.stringify({
-                    reviewerEmail: user.email,
                     revieweeEmail: selectedBooking.userEmail,
-                    bookingId: selectedBooking.id,
+                    bookingId: selectedBooking.id, // Optional based on backend
                     rating: parseInt(rating),
                     comment: comment
                 })
             });
-            setStatusMsg({ type: "success", text: "Passenger rated successfully!" });
+            showToast("Passenger rated successfully!", 'success');
             setRateModalOpen(false);
         } catch (err) {
-            setStatusMsg({ type: "error", text: "Failed to submit rating: " + err.message });
+            showToast("Failed to submit rating: " + err.message, 'error');
         }
     };
 
-    const isRideCompleted = (dateStr) => {
-        if (!dateStr) return false;
-        return new Date(dateStr) < new Date();
-    };
-
-
     return (
         <div className="container mt-4 pb-20">
-            <header className="mb-10 flex justify-between items-end">
+            <header className="mb-10 flex justify-between items-end" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2.5rem' }}>
                 <div>
-                    <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem', background: 'linear-gradient(to right, var(--primary), var(--accent))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                    <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem', background: 'linear-gradient(to right, var(--primary), #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', display: 'inline-block' }}>
                         Driver Command Center
                     </h1>
-                    <p className="text-muted mb-0">Manage your deployments, requests, and performance</p>
+                    <p className="text-muted mb-0" style={{ color: 'var(--text-muted)' }}>Manage your deployments, requests, and performance</p>
                 </div>
                 <div className="flex gap-3">
                     <button className="btn btn-primary" onClick={() => nav("/driver/add-ride")}>+ Post New Ride</button>
@@ -173,7 +253,9 @@ const DriverDashboard = () => {
                     background: statusMsg.type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.1)',
                     border: `1px solid ${statusMsg.type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.2)'}`,
                     color: statusMsg.type === 'error' ? '#ef4444' : '#22c55e',
-                    padding: '1rem'
+                    padding: '1rem',
+                    borderRadius: '12px',
+                    marginBottom: '2rem'
                 }}>
                     <div className="flex items-center gap-2 font-bold">
                         {statusMsg.type === 'error' ? '⚠️' : '✅'} {statusMsg.text}
@@ -181,64 +263,67 @@ const DriverDashboard = () => {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 fade-in">
-                <div className="glass-card text-center transition-all hover:-translate-y-1">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 fade-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem', marginBottom: '2.5rem' }}>
+                <div className="card glass text-center transition-all hover:-translate-y-1">
                     <div style={{ padding: '20px', background: 'var(--primary-glow)', borderRadius: '16px', color: 'var(--primary)', width: 'fit-content', margin: '0 auto 1.5rem' }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 17h6" /><path d="M2 12h12" /><path d="M2 7h16" /><path d="M20 12h.01" /><path d="M20 17h.01" /><path d="M20 7h.01" /></svg>
+                        📝
                     </div>
                     <h3 className="text-primary mb-1" style={{ fontSize: '2.5rem', fontWeight: 800 }}>{stats.total}</h3>
-                    <p className="text-muted text-xs font-bold uppercase tracking-widest opacity-60">Total Requests</p>
+                    <p className="text-muted text-xs font-bold uppercase tracking-widest opacity-60" style={{ fontSize: '0.75rem', letterSpacing: '0.1em' }}>Total Requests</p>
                 </div>
-                <div className="glass-card text-center transition-all hover:-translate-y-1">
+                <div className="card glass text-center transition-all hover:-translate-y-1">
                     <div style={{ padding: '20px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '16px', color: 'var(--warning)', width: 'fit-content', margin: '0 auto 1.5rem' }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                        ⏳
                     </div>
-                    <h3 className="text-warning mb-1" style={{ fontSize: '2.5rem', fontWeight: 800 }}>{stats.pending}</h3>
-                    <p className="text-muted text-xs font-bold uppercase tracking-widest opacity-60">Awaiting Action</p>
+                    <h3 className="text-warning mb-1" style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--warning)' }}>{stats.pending}</h3>
+                    <p className="text-muted text-xs font-bold uppercase tracking-widest opacity-60" style={{ fontSize: '0.75rem', letterSpacing: '0.1em' }}>Awaiting Action</p>
                 </div>
-                <div className="glass-card text-center transition-all hover:-translate-y-1">
+                <div className="card glass text-center transition-all hover:-translate-y-1">
                     <div style={{ padding: '20px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '16px', color: 'var(--success)', width: 'fit-content', margin: '0 auto 1.5rem' }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
+                        🚀
                     </div>
-                    <h3 className="text-success mb-1" style={{ fontSize: '2.5rem', fontWeight: 800 }}>{stats.confirmed}</h3>
-                    <p className="text-muted text-xs font-bold uppercase tracking-widest opacity-60">Active Bookings</p>
+                    <h3 className="text-success mb-1" style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--success)' }}>{stats.confirmed}</h3>
+                    <p className="text-muted text-xs font-bold uppercase tracking-widest opacity-60" style={{ fontSize: '0.75rem', letterSpacing: '0.1em' }}>Active Bookings</p>
                 </div>
             </div>
 
-            <div className="glass-card mb-12 slide-up" style={{ padding: '0', overflow: 'hidden', animationDelay: '0.1s' }}>
-                <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--glass-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3 className="mb-0" style={{ fontSize: '1.25rem' }}>My Active Deployments</h3>
-                    <div className="badge primary">{myRides.length} Active</div>
+            <div className="card glass mb-12 slide-up" style={{ padding: '0', overflow: 'hidden', animationDelay: '0.1s', marginBottom: '3rem' }}>
+                <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3 className="mb-0" style={{ fontSize: '1.25rem', margin: 0 }}>My Active Rides</h3>
+                    <div className="badge badge-success">{myRides.length} Active</div>
                 </div>
-                <div className="table-container">
-                    <table className="table">
+                <div className="table-wrapper">
+                    <table className="table" style={{ width: '100%' }}>
                         <thead style={{ background: 'rgba(255,255,255,0.02)' }}>
                             <tr>
-                                <th style={{ paddingLeft: '1.5rem' }}>Route</th>
-                                <th>Date</th>
-                                <th>Fare</th>
-                                <th>Seats</th>
-                                <th style={{ textAlign: 'right', paddingRight: '1.5rem' }}>Action</th>
+                                <th style={{ paddingLeft: '1.5rem', textAlign: 'left', padding: '1rem' }}>Route</th>
+                                <th style={{ textAlign: 'left', padding: '1rem' }}>Date</th>
+                                <th style={{ textAlign: 'left', padding: '1rem' }}>Fare</th>
+                                <th style={{ textAlign: 'left', padding: '1rem' }}>Seats</th>
+                                <th style={{ textAlign: 'right', paddingRight: '1.5rem', padding: '1rem' }}>Action</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {errorMsg && <tr><td colSpan="5" className="text-center py-10 text-danger">{errorMsg}</td></tr>}
-                            {loadingRides && <tr><td colSpan="5" className="text-center py-10">
-                                <div className="spinner mx-auto mb-2"></div>
-                                <span className="text-muted">Loading your fleet...</span>
+                            {errorMsg && <tr><td colSpan="5" className="text-center py-10 text-danger" style={{ padding: '2rem', textAlign: 'center', color: 'var(--danger)' }}>{errorMsg}</td></tr>}
+                            {loadingRides && <tr><td colSpan="5" className="text-center py-10" style={{ padding: '2rem', textAlign: 'center' }}>
+                                <div className="animate-spin" style={{ display: 'inline-block', width: '20px', height: '20px', border: '2px solid var(--primary)', borderRadius: '50%', borderTopColor: 'transparent' }}></div>
+                                <span className="text-muted" style={{ marginLeft: '10px' }}>Loading your fleet...</span>
                             </td></tr>}
-                            {!loadingRides && !errorMsg && myRides.length === 0 && <tr><td colSpan="5" className="text-center py-10 text-muted">No rides posted yet. Start by creating one!</td></tr>}
+                            {!loadingRides && !errorMsg && myRides.length === 0 && <tr><td colSpan="5" className="text-center py-10 text-muted" style={{ padding: '2rem', textAlign: 'center' }}>No rides posted yet. Start by creating one!</td></tr>}
                             {!loadingRides && !errorMsg && myRides.slice((ridesPage - 1) * itemsPerPage, ridesPage * itemsPerPage).map(r => (
                                 <tr key={r.id} className="hover-trigger transition-all">
-                                    <td style={{ paddingLeft: '1.5rem', fontWeight: 600 }}>{r.fromLocation} &rarr; {r.toLocation}</td>
-                                    <td>{new Date(r.date).toLocaleDateString()}</td>
-                                    <td className="text-success font-bold">₹{r.price}</td>
-                                    <td>
-                                        <div className="badge outline">{r.tickets} Left</div>
+                                    <td style={{ paddingLeft: '1.5rem', fontWeight: 600, padding: '1rem' }}>{r.fromLocation} &rarr; {r.toLocation}</td>
+                                    <td style={{ padding: '1rem' }}>
+                                        <div>{new Date(r.date).toLocaleDateString()}</div>
+                                        {r.time && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{r.time}</div>}
                                     </td>
-                                    <td style={{ textAlign: 'right', paddingRight: '1.5rem' }}>
-                                        <button className="btn btn-sm btn-outline" onClick={() => nav(`/driver/reserve/${r.id}`)}>
-                                            Reserve Seats
+                                    <td className="text-success font-bold" style={{ padding: '1rem', color: 'var(--success)' }}>₹{r.price}</td>
+                                    <td style={{ padding: '1rem' }}>
+                                        <div className="badge">{r.tickets} Left</div>
+                                    </td>
+                                    <td style={{ textAlign: 'right', paddingRight: '1.5rem', padding: '1rem' }}>
+                                        <button className="btn btn-primary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }} onClick={() => handleCompleteRide(r.id)}>
+                                            Mark Completed
                                         </button>
                                     </td>
                                 </tr>
@@ -248,20 +333,20 @@ const DriverDashboard = () => {
                 </div>
                 {/* Pagination My Rides */}
                 {myRides.length > itemsPerPage && (
-                    <div className="flex justify-center items-center py-4 gap-4" style={{ background: 'rgba(255,255,255,0.02)', borderTop: '1px solid var(--glass-border)' }}>
-                        <button className="btn btn-sm btn-secondary" disabled={ridesPage === 1} onClick={() => setRidesPage(p => p - 1)}>&larr;</button>
-                        <span className="text-xs font-bold opacity-60">Page {ridesPage} of {Math.ceil(myRides.length / itemsPerPage)}</span>
-                        <button className="btn btn-sm btn-secondary" disabled={ridesPage === Math.ceil(myRides.length / itemsPerPage)} onClick={() => setRidesPage(p => p + 1)}>&rarr;</button>
+                    <div className="flex justify-center items-center py-4 gap-4" style={{ display: 'flex', justifyContent: 'center', gap: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderTop: '1px solid var(--border)' }}>
+                        <button className="btn btn-outline" disabled={ridesPage === 1} onClick={() => setRidesPage(p => p - 1)}>&larr;</button>
+                        <span className="text-xs font-bold opacity-60" style={{ fontSize: '0.8rem' }}>Page {ridesPage} of {Math.ceil(myRides.length / itemsPerPage)}</span>
+                        <button className="btn btn-outline" disabled={ridesPage === Math.ceil(myRides.length / itemsPerPage)} onClick={() => setRidesPage(p => p + 1)}>&rarr;</button>
                     </div>
                 )}
             </div>
 
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex justify-between items-center mb-6" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                 <div>
-                    <h3 className="mb-0">Incoming Requests</h3>
-                    <p className="text-muted text-xs mb-0">Approve or reject passenger bookings</p>
+                    <h3 className="mb-0" style={{ margin: 0 }}>Incoming Requests</h3>
+                    <p className="text-muted text-xs mb-0" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Approve or reject passenger bookings</p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2" style={{ display: 'flex', gap: '0.5rem' }}>
                     <div style={{ position: 'relative', width: '250px' }}>
                         <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', opacity: 0.5, fontSize: '0.8rem' }}>🔍</span>
                         <input
@@ -272,33 +357,34 @@ const DriverDashboard = () => {
                             onChange={e => setSearchText(e.target.value)}
                         />
                     </div>
-                    <button className="btn btn-sm btn-secondary" onClick={toggleSort} style={{ minWidth: '120px' }}>
+                    <button className="btn btn-outline" onClick={toggleSort} style={{ minWidth: '100px' }}>
                         Date {sortOrder === 'asc' ? '↑' : '↓'}
                     </button>
                 </div>
             </div>
 
-            <div className="glass-card slide-up" style={{ padding: '0', overflow: 'hidden', animationDelay: '0.2s' }}>
-                <div className="table-container">
-                    <table className="table">
+            <div className="card glass slide-up" style={{ padding: '0', overflow: 'hidden', animationDelay: '0.2s', marginBottom: '3rem' }}>
+                <div className="table-wrapper">
+                    <table className="table" style={{ width: '100%' }}>
                         <thead style={{ background: 'rgba(255,255,255,0.02)' }}>
                             <tr>
-                                <th style={{ paddingLeft: '1.5rem' }}>Passenger Profile</th>
-                                <th>Route</th>
-                                <th>Date</th>
-                                <th>Seats</th>
-                                <th>Status</th>
-                                <th style={{ textAlign: 'right', paddingRight: '1.5rem' }}>Decision</th>
+                                <th style={{ paddingLeft: '1.5rem', textAlign: 'left', padding: '1rem' }}>Passenger Profile</th>
+                                <th style={{ textAlign: 'left', padding: '1rem' }}>Route</th>
+                                <th style={{ textAlign: 'left', padding: '1rem' }}>Method</th>
+                                <th style={{ textAlign: 'left', padding: '1rem' }}>Date</th>
+                                <th style={{ textAlign: 'left', padding: '1rem' }}>Seats</th>
+                                <th style={{ textAlign: 'left', padding: '1rem' }}>Status</th>
+                                <th style={{ textAlign: 'right', paddingRight: '1.5rem', padding: '1rem' }}>Decision</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {filteredBookings.length === 0 && <tr><td colSpan="6" className="text-center py-10 text-muted">No booking requests found.</td></tr>}
+                            {filteredBookings.length === 0 && <tr><td colSpan="6" className="text-center py-10 text-muted" style={{ padding: '2rem', textAlign: 'center' }}>No booking requests found.</td></tr>}
                             {filteredBookings.slice((requestsPage - 1) * itemsPerPage, requestsPage * itemsPerPage).map(b => (
                                 <tr key={b.id} className="hover-trigger transition-all">
-                                    <td style={{ paddingLeft: '1.5rem' }}>
-                                        <div className="flex items-center gap-3">
-                                            <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'var(--primary-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.8rem', color: 'var(--primary)' }}>
-                                                {b.userEmail.charAt(0).toUpperCase()}
+                                    <td style={{ paddingLeft: '1.5rem', padding: '1rem' }}>
+                                        <div className="flex items-center gap-3" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                            <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(var(--primary-rgb), 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.8rem', color: 'var(--primary)' }}>
+                                                {(b.userEmail || "?").charAt(0).toUpperCase()}
                                             </div>
                                             <div>
                                                 <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{b.passengers && b.passengers[0] ? b.passengers[0].name : b.userEmail}</div>
@@ -306,45 +392,64 @@ const DriverDashboard = () => {
                                             </div>
                                         </div>
                                     </td>
-                                    <td style={{ fontSize: '0.85rem' }}>
-                                        {b.vehicle?.fromLocation} <span className="opacity-30">&rarr;</span> {b.vehicle?.toLocation}
+                                    <td style={{ fontSize: '0.85rem', padding: '1rem' }}>
+                                        {b.ride?.fromLocation} <span className="opacity-30">&rarr;</span> {b.ride?.toLocation}
                                     </td>
-                                    <td style={{ fontSize: '0.85rem' }}>{b.vehicle?.date}</td>
-                                    <td><div className="badge outline">{b.seats}</div></td>
-                                    <td>
-                                        <span className={`badge ${b.status === "CONFIRMED" ? "success" : b.status === "PENDING" ? "warning" : "danger"}`}>
-                                            {b.status}
+                                    <td style={{ padding: '1rem' }}>
+                                        <span className={`badge ${b.paymentMethod === 'CASH' ? 'badge-success' : 'badge-primary'}`} style={{ fontSize: '0.7rem' }}>
+                                            {b.paymentMethod === 'CASH' ? '💵 Cash' : '💳 Stripe'}
                                         </span>
                                     </td>
-                                    <td style={{ textAlign: 'right', paddingRight: '1.5rem' }}>
+                                    <td style={{ fontSize: '0.85rem', padding: '1rem' }}>
+                                        <div>{b.ride?.date}</div>
+                                        {b.ride?.time && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{b.ride?.time}</div>}
+                                    </td>
+                                    <td style={{ padding: '1rem' }}><div className="badge">{b.seats}</div></td>
+                                    <td style={{ padding: '1rem' }}>
+                                        <span className={`badge badge-${(b.status === "ACCEPTED" || b.status === "PAID" || b.status === "COMPLETED") ? "success" : b.status === "PENDING" ? "warning" : b.status === "DRIVER_COMPLETED" ? "info" : "danger"}`}>
+                                            {getStatusLabel(b)}
+                                        </span>
+                                    </td>
+                                    <td style={{ textAlign: 'right', paddingRight: '1.5rem', padding: '1rem' }}>
                                         {b.status === "PENDING" && (
-                                            <div className="flex justify-end gap-2">
+                                            <div className="flex justify-end gap-2" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                                                 <button
-                                                    className="btn btn-sm btn-success"
-                                                    style={{ padding: '0', width: '38px', height: '38px', borderRadius: '10px' }}
-                                                    onClick={() => updateStatus(b.id, "CONFIRMED")}
+                                                    className="btn btn-primary"
+                                                    style={{ padding: '0.4rem 0.6rem', minWidth: 'auto' }}
+                                                    onClick={() => openConfirm(
+                                                        "Accept Request",
+                                                        "Accept this passenger for the ride?",
+                                                        () => updateStatus(b.id, "ACCEPTED"),
+                                                        "primary",
+                                                        "Accept"
+                                                    )}
                                                     title="Accept Request"
                                                 >
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                    ✓
                                                 </button>
                                                 <button
-                                                    className="btn btn-sm btn-danger"
-                                                    style={{ padding: '0', width: '38px', height: '38px', borderRadius: '10px' }}
-                                                    onClick={() => updateStatus(b.id, "REJECTED")}
+                                                    className="btn btn-outline"
+                                                    style={{ padding: '0.4rem 0.6rem', minWidth: 'auto', borderColor: 'var(--danger)', color: 'var(--danger)' }}
+                                                    onClick={() => openConfirm(
+                                                        "Reject Request",
+                                                        "Are you sure you want to REJECT this booking request?",
+                                                        () => updateStatus(b.id, "REJECTED"),
+                                                        "danger",
+                                                        "Reject"
+                                                    )}
                                                     title="Reject Request"
                                                 >
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                                    ✕
                                                 </button>
                                             </div>
                                         )}
-                                        {b.status === "CONFIRMED" && (
-                                            <div className="flex justify-end items-center gap-3">
-                                                <span className="text-success font-bold flex items-center gap-1 text-xs uppercase tracking-tighter">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                                    Verified
+                                        {(b.status === "ACCEPTED" || b.status === "PAID") && (
+                                            <div className="flex justify-end items-center gap-3" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.75rem' }}>
+                                                <span className="text-success font-bold flex items-center gap-1 text-xs uppercase tracking-tighter" style={{ fontSize: '0.75rem', color: 'var(--success)' }}>
+                                                    ✓ {b.status}
                                                 </span>
                                                 <button
-                                                    className="btn btn-sm btn-outline"
+                                                    className="btn btn-outline"
                                                     style={{ fontSize: '0.7rem', padding: '4px 10px', borderColor: 'var(--accent)', color: 'var(--accent)' }}
                                                     onClick={() => handleOpenRate(b)}
                                                 >
@@ -352,9 +457,18 @@ const DriverDashboard = () => {
                                                 </button>
                                             </div>
                                         )}
+                                        {b.status === "CASH_PAYMENT_PENDING" && (
+                                            <button
+                                                className="btn btn-success"
+                                                style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
+                                                onClick={() => handleConfirmCash(b.id)}
+                                            >
+                                                💵 Confirm Cash Received
+                                            </button>
+                                        )}
 
                                         {b.status === "CANCELLED" && <span className="text-muted text-xs opacity-50 italic">Cancelled</span>}
-                                        {b.status === "REJECTED" && <span className="text-danger text-xs opacity-50 italic">Rejected</span>}
+                                        {b.status === "REJECTED" && <span className="text-danger text-xs opacity-50 italic" style={{ color: 'var(--danger)' }}>Rejected</span>}
                                     </td>
                                 </tr>
                             ))}
@@ -363,39 +477,39 @@ const DriverDashboard = () => {
                 </div>
                 {/* Pagination Requests */}
                 {filteredBookings.length > itemsPerPage && (
-                    <div className="flex justify-center items-center py-4 gap-4" style={{ background: 'rgba(255,255,255,0.02)', borderTop: '1px solid var(--glass-border)' }}>
-                        <button className="btn btn-sm btn-secondary" disabled={requestsPage === 1} onClick={() => setRequestsPage(p => p - 1)}>&larr;</button>
-                        <span className="text-xs font-bold opacity-60">Page {requestsPage} of {Math.ceil(filteredBookings.length / itemsPerPage)}</span>
-                        <button className="btn btn-sm btn-secondary" disabled={requestsPage === Math.ceil(filteredBookings.length / itemsPerPage)} onClick={() => setRequestsPage(p => p + 1)}>&rarr;</button>
+                    <div className="flex justify-center items-center py-4 gap-4" style={{ display: 'flex', justifyContent: 'center', gap: '1rem', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderTop: '1px solid var(--border)' }}>
+                        <button className="btn btn-outline" disabled={requestsPage === 1} onClick={() => setRequestsPage(p => p - 1)}>&larr;</button>
+                        <span className="text-xs font-bold opacity-60" style={{ fontSize: '0.8rem' }}>Page {requestsPage} of {Math.ceil(filteredBookings.length / itemsPerPage)}</span>
+                        <button className="btn btn-outline" disabled={requestsPage === Math.ceil(filteredBookings.length / itemsPerPage)} onClick={() => setRequestsPage(p => p + 1)}>&rarr;</button>
                     </div>
                 )}
             </div>
 
-            <div className="glass-card mt-12 slide-up" style={{ animationDelay: '0.3s' }}>
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            <div className="card glass mt-12 slide-up" style={{ animationDelay: '0.3s' }}>
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.5rem', borderBottom: '1px solid var(--border)' }}>
                     <div>
-                        <h3 className="mb-0">Driver Reputation</h3>
-                        <p className="text-muted text-xs mb-0">What passengers are saying about your service</p>
+                        <h3 className="mb-0" style={{ margin: 0 }}>Driver Reputation</h3>
+                        <p className="text-muted text-xs mb-0" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>What passengers are saying about your service</p>
                     </div>
                     {myReviews.length > 0 && (
-                        <div className="badge success" style={{ padding: '0.75rem 1.5rem', fontSize: '1rem' }}>
+                        <div className="badge badge-success" style={{ padding: '0.75rem 1.5rem', fontSize: '1rem' }}>
                             ⭐ {(myReviews.reduce((acc, r) => acc + r.rating, 0) / myReviews.length).toFixed(1)} Rating
                         </div>
                     )}
                 </div>
 
                 {myReviews.length === 0 ? (
-                    <div className="text-center py-10 glass" style={{ borderRadius: 'var(--radius-md)' }}>
+                    <div className="text-center py-10 glass" style={{ padding: '3rem', textAlign: 'center' }}>
                         <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📋</div>
                         <p className="text-muted mb-0">No reviews yet. Complete more rides to build your reputation!</p>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 gap-4">
+                    <div className="grid grid-cols-1 gap-4" style={{ padding: '1.5rem', display: 'grid', gap: '1rem' }}>
                         {myReviews.slice((reviewsPage - 1) * itemsPerPage, reviewsPage * itemsPerPage).map(r => (
-                            <div key={r.id} className="glass p-5 hover-trigger" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--glass-border)' }}>
-                                <div className="flex justify-between items-start mb-3">
-                                    <div className="flex items-center gap-3">
-                                        <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 800, color: 'var(--accent)' }}>
+                            <div key={r.id} className="card glass p-5 hover-trigger" style={{ padding: '1.5rem', borderRadius: '12px', background: 'rgba(255,255,255,0.02)' }}>
+                                <div className="flex justify-between items-start mb-3" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <div className="flex items-center gap-3" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                        <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'rgba(var(--primary-rgb), 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 800, color: 'var(--primary)' }}>
                                             {r.reviewerEmail.charAt(0).toUpperCase()}
                                         </div>
                                         <div>
@@ -407,15 +521,15 @@ const DriverDashboard = () => {
                                         <StarRating rating={r.rating} readOnly={true} />
                                     </div>
                                 </div>
-                                <p className="mb-0 text-sm italic" style={{ lineHeight: 1.6 }}>"{r.comment}"</p>
+                                <p className="mb-0 text-sm italic" style={{ lineHeight: 1.6, margin: 0, fontStyle: 'italic' }}>"{r.comment}"</p>
                             </div>
                         ))}
                         {/* Pagination Reviews */}
                         {myReviews.length > itemsPerPage && (
-                            <div className="flex justify-center items-center py-4 gap-4 mt-2">
-                                <button className="btn btn-sm btn-secondary" disabled={reviewsPage === 1} onClick={() => setReviewsPage(p => p - 1)}>&larr;</button>
+                            <div className="flex justify-center items-center py-4 gap-4 mt-2" style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+                                <button className="btn btn-outline" disabled={reviewsPage === 1} onClick={() => setReviewsPage(p => p - 1)}>&larr;</button>
                                 <span className="text-xs font-bold opacity-60">Page {reviewsPage} of {Math.ceil(myReviews.length / itemsPerPage)}</span>
-                                <button className="btn btn-sm btn-secondary" disabled={reviewsPage === Math.ceil(myReviews.length / itemsPerPage)} onClick={() => setReviewsPage(p => p + 1)}>&rarr;</button>
+                                <button className="btn btn-outline" disabled={reviewsPage === Math.ceil(myReviews.length / itemsPerPage)} onClick={() => setReviewsPage(p => p + 1)}>&rarr;</button>
                             </div>
                         )}
                     </div>
@@ -423,34 +537,43 @@ const DriverDashboard = () => {
             </div>
             {/* Driver rating Passenger Modal */}
             {rateModalOpen && (
-                <div className="modal-overlay" style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(10px)', zIndex: 3000 }}>
-                    <div className="glass-card slide-up" style={{ width: '100%', maxWidth: '400px', padding: '0', overflow: 'hidden' }}>
-                        <div style={{ padding: '20px', background: 'var(--primary-glow)', borderBottom: '1px solid var(--glass-border)', textAlign: 'center' }}>
+                <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(5px)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div className="card glass slide-up" style={{ width: '100%', maxWidth: '400px', padding: '0', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px', background: 'var(--primary-glow)', borderBottom: '1px solid var(--border)', textAlign: 'center' }}>
                             <h3 className="mb-0">Rate Passenger</h3>
-                            <p className="text-muted text-xs mb-0 mt-1">Reviewing {selectedBooking?.userEmail}</p>
+                            <p className="text-muted text-xs mb-0 mt-1" style={{ fontSize: '0.8rem' }}>Reviewing {selectedBooking?.userEmail}</p>
                         </div>
                         <div style={{ padding: '20px' }}>
-                            <div className="flex justify-center mb-6">
+                            <div className="flex justify-center mb-6" style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.5rem' }}>
                                 <StarRating rating={rating} setRating={setRating} />
                             </div>
-                            <div className="mb-6">
-                                <label className="text-xs font-bold uppercase opacity-60 mb-2 block">Notes on passenger CONDUCT</label>
+                            <div className="mb-6" style={{ marginBottom: '1.5rem' }}>
+                                <label className="text-xs font-bold uppercase opacity-60 mb-2 block" style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.5rem' }}>Notes on passenger CONDUCT</label>
                                 <textarea
                                     className="input w-full"
-                                    style={{ height: '100px', fontSize: '0.85rem' }}
+                                    style={{ height: '100px', fontSize: '0.85rem', width: '100%' }}
                                     placeholder="Was the passenger on time? Polite?"
                                     value={comment}
                                     onChange={e => setComment(e.target.value)}
                                 />
                             </div>
-                            <div className="flex gap-3">
-                                <button className="btn btn-secondary flex-1" onClick={() => setRateModalOpen(false)}>Cancel</button>
-                                <button className="btn btn-primary flex-1" onClick={handleSubmitRate}>Submit Review</button>
+                            <div className="flex gap-3" style={{ display: 'flex', gap: '0.75rem' }}>
+                                <button className="btn btn-outline" style={{ flex: 1 }} onClick={() => setRateModalOpen(false)}>Cancel</button>
+                                <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSubmitRate}>Submit Review</button>
                             </div>
                         </div>
                     </div>
                 </div>
             )}
+            <ConfirmModal
+                isOpen={confirmModal.isOpen}
+                title={confirmModal.title}
+                message={confirmModal.message}
+                onConfirm={confirmModal.onConfirm}
+                onCancel={closeConfirm}
+                type={confirmModal.type}
+                confirmText={confirmModal.confirmText}
+            />
         </div>
     );
 };
